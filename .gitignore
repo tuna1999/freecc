@@ -1,0 +1,8 @@
+node_modules/
+dist/
+/cli
+/cli-dev
+openclaw/
+.jarmcp/
+*.exe
+*.bun-build
