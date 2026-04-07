@@ -76,6 +76,12 @@ function applyProvider(provider: APIProvider): void {
   if (option && option.envVar) {
     process.env[option.envVar] = '1'
   }
+
+  // Persist the choice so it survives restarts
+  saveGlobalConfig((current) => ({
+    ...current,
+    apiProvider: provider,
+  }))
 }
 
 /**

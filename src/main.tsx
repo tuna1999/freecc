@@ -592,6 +592,26 @@ export async function main() {
 
   // Initialize warning handler early to catch warnings
   initializeWarningHandler();
+
+  // Restore persisted provider choice from config
+  // Must run before any getAPIProvider() calls
+  try {
+    const { getGlobalConfig: getGCfg } = await import('./utils/config.js');
+    const savedProvider = getGCfg().apiProvider;
+    if (savedProvider && savedProvider !== 'firstParty') {
+      const envVarMap: Record<string, string> = {
+        bedrock: 'CLAUDE_CODE_USE_BEDROCK',
+        vertex: 'CLAUDE_CODE_USE_VERTEX',
+        foundry: 'CLAUDE_CODE_USE_FOUNDRY',
+        openai: 'CLAUDE_CODE_USE_OPENAI',
+      };
+      const envVar = envVarMap[savedProvider];
+      if (envVar && !process.env[envVar]) {
+        process.env[envVar] = '1';
+      }
+    }
+  } catch {}
+
   process.on('exit', () => {
     resetCursor();
   });

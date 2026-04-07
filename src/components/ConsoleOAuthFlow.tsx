@@ -276,6 +276,9 @@ export function ConsoleOAuthFlow({
       saveCodexOAuthTokens(codexTokens);
       // Auto-switch provider to OpenAI after successful Codex login
       process.env.CLAUDE_CODE_USE_OPENAI = '1';
+      // Persist provider choice for next startup
+      const { saveGlobalConfig: saveGCfg } = await import('../utils/config.js');
+      saveGCfg((c) => ({ ...c, apiProvider: 'openai' }));
       logEvent('tengu_oauth_codex_success', {});
       setOAuthStatus({ state: 'success' });
       void sendNotification({ message: 'Codex login successful', notificationType: 'auth_success' }, terminal);

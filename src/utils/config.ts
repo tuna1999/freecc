@@ -233,6 +233,12 @@ export type GlobalConfig = {
    * These are acquired via the Codex OAuth flow (auth.openai.com) and are used
    * as Bearer tokens against OpenAI's API — they are never sent to Anthropic servers.
    */
+  /**
+   * Persisted API provider choice. Restored on startup to set the
+   * corresponding CLAUDE_CODE_USE_* env var.
+   */
+  apiProvider?: 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai'
+
   codexOAuth?: {
     accessToken: string
     refreshToken: string
