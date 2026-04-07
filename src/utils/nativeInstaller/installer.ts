@@ -1688,8 +1688,8 @@ export async function cleanupNpmInstallations(): Promise<{
     }
   }
 
-  // Check for local installation at ~/.claude/local
-  const localInstallDir = join(homedir(), '.claude', 'local')
+  // Check for local installation at ~/.freecc/local
+  const localInstallDir = join(homedir(), '.freecc', 'local')
 
   try {
     await rm(localInstallDir, { recursive: true })
