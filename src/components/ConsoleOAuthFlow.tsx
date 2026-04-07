@@ -80,6 +80,7 @@ function ThirdPartyApiKeySetup({
       openaiApiKey: key,
       openaiBaseUrl: baseUrl || undefined,
       openaiModel: modelId || undefined,
+      openaiAvailableModels: models.length > 0 ? models.map(m => m.id) : undefined,
       apiProvider: 'openai',
     }))
     process.env.CLAUDE_CODE_USE_OPENAI = '1'

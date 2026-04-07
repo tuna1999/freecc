@@ -14,7 +14,9 @@ import { MODEL_ALIASES } from '../../utils/model/aliases.js';
 import { checkOpus1mAccess, checkSonnet1mAccess } from '../../utils/model/check1mAccess.js';
 import { getDefaultMainLoopModelSetting, isOpus1mMergeEnabled, renderDefaultModelSetting } from '../../utils/model/model.js';
 import { isModelAllowed } from '../../utils/model/modelAllowlist.js';
+import { getAPIProvider } from '../../utils/model/providers.js';
 import { validateModel } from '../../utils/model/validateModel.js';
+import { saveGlobalConfig } from '../../utils/config.js';
 function ModelPickerWrapper(t0) {
   const $ = _c(17);
   const {
@@ -201,6 +203,9 @@ function SetModelAndClose({
         mainLoopModel: modelValue,
         mainLoopModelForSession: null
       }));
+      if (getAPIProvider() === 'openai' && modelValue) {
+        saveGlobalConfig(current => ({ ...current, openaiModel: modelValue }));
+      }
       let message = `Set model to ${chalk.bold(renderModelLabel(modelValue))}`;
       let wasFastModeToggledOn = undefined;
       if (isFastModeEnabled()) {

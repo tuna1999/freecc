@@ -318,6 +318,16 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
 
   // Codex subscribers get OpenAI model options
   if (isCodexSubscriber()) {
+    const cfg = getGlobalConfig()
+    // API key users: show fetched models if available
+    if (cfg.openaiAvailableModels && cfg.openaiAvailableModels.length > 0) {
+      return cfg.openaiAvailableModels.map(id => ({
+        value: id,
+        label: id,
+        description: '',
+      }))
+    }
+    // Codex OAuth users: show hardcoded GPT models
     return [
       getDefaultOptionForUser(),
       getGpt54Option(),

@@ -263,6 +263,7 @@ export type GlobalConfig = {
    * When set, overrides the default model mapping.
    */
   openaiModel?: string
+  openaiAvailableModels?: string[]
   iterm2KeyBindingInstalled?: boolean // Legacy - keeping for backward compatibility
   editorMode?: EditorMode
   bypassPermissionsModeAccepted?: boolean
