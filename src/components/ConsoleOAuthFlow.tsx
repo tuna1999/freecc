@@ -64,27 +64,25 @@ function ThirdPartyApiKeySetup({
   onDone(): void
   onBack(): void
 }): React.ReactNode {
-  const [step, setStep] = React.useState<'api-key' | 'base-url'>('api-key')
+  const [step, setStep] = React.useState<'base-url' | 'api-key'>('base-url')
   const [apiKey, setApiKey] = React.useState('')
   const [baseUrl, setBaseUrl] = React.useState('')
 
-  useKeybinding('confirm:no', onBack, { context: 'Cancel', isActive: step === 'api-key' })
+  useKeybinding('confirm:no', onBack, { context: 'Cancel', isActive: step === 'base-url' })
 
-  if (step === 'api-key') {
+  if (step === 'base-url') {
     return (
       <Box flexDirection="column" gap={1} marginTop={1}>
-        <Text bold>OpenAI-compatible API Key</Text>
-        <Text dimColor>Enter your API key:</Text>
+        <Text bold>API Base URL</Text>
+        <Text dimColor>Enter base URL (leave empty for https://api.openai.com/v1):</Text>
         <TextInput
-          value={apiKey}
-          onChange={setApiKey}
+          value={baseUrl}
+          onChange={setBaseUrl}
           onSubmit={(value: string) => {
-            const trimmed = value.trim()
-            if (!trimmed) { onBack(); return }
-            setApiKey(trimmed)
-            setStep('base-url')
+            setBaseUrl(value.trim())
+            setStep('api-key')
           }}
-          placeholder="sk-..."
+          placeholder="https://api.openai.com/v1"
         />
         <Text dimColor>Press Esc to go back</Text>
       </Box>
@@ -93,25 +91,26 @@ function ThirdPartyApiKeySetup({
 
   return (
     <Box flexDirection="column" gap={1} marginTop={1}>
-      <Text bold>API Base URL</Text>
-      <Text dimColor>Enter base URL (leave empty for https://api.openai.com/v1):</Text>
+      <Text bold>OpenAI-compatible API Key</Text>
+      <Text dimColor>Enter your API key:</Text>
       <TextInput
-        value={baseUrl}
-        onChange={setBaseUrl}
+        value={apiKey}
+        onChange={setApiKey}
         onSubmit={(value: string) => {
-          const trimmedUrl = value.trim()
+          const trimmed = value.trim()
+          if (!trimmed) return
           saveGlobalConfig(current => ({
             ...current,
-            openaiApiKey: apiKey,
-            openaiBaseUrl: trimmedUrl || undefined,
+            openaiApiKey: trimmed,
+            openaiBaseUrl: baseUrl || undefined,
             apiProvider: 'openai',
           }))
           process.env.CLAUDE_CODE_USE_OPENAI = '1'
           onDone()
         }}
-        placeholder="https://api.openai.com/v1"
+        placeholder="sk-..."
       />
-      <Text dimColor>Leave empty to use default OpenAI endpoint · Press Enter to confirm</Text>
+      <Text dimColor>Press Enter to confirm</Text>
     </Box>
   )
 }
