@@ -32,6 +32,9 @@ type OAuthStatus = {
   state: 'platform_setup';
 } // Show platform setup info (Bedrock/Vertex/Foundry)
 | {
+  state: 'apikey_setup';
+} // OpenAI-compatible API key setup
+| {
   state: 'ready_to_start';
 } // Flow started, waiting for browser to open
 | {
@@ -53,6 +56,66 @@ type OAuthStatus = {
   toRetry?: OAuthStatus;
 };
 const PASTE_HERE_MSG = 'Paste code here if prompted > ';
+
+function ThirdPartyApiKeySetup({
+  onDone,
+  onBack,
+}: {
+  onDone(): void
+  onBack(): void
+}): React.ReactNode {
+  const [step, setStep] = React.useState<'api-key' | 'base-url'>('api-key')
+  const [apiKey, setApiKey] = React.useState('')
+  const [baseUrl, setBaseUrl] = React.useState('')
+
+  useKeybinding('confirm:no', onBack, { context: 'Cancel', isActive: step === 'api-key' })
+
+  if (step === 'api-key') {
+    return (
+      <Box flexDirection="column" gap={1} marginTop={1}>
+        <Text bold>OpenAI-compatible API Key</Text>
+        <Text dimColor>Enter your API key:</Text>
+        <TextInput
+          value={apiKey}
+          onChange={setApiKey}
+          onSubmit={(value: string) => {
+            const trimmed = value.trim()
+            if (!trimmed) { onBack(); return }
+            setApiKey(trimmed)
+            setStep('base-url')
+          }}
+          placeholder="sk-..."
+        />
+        <Text dimColor>Press Esc to go back</Text>
+      </Box>
+    )
+  }
+
+  return (
+    <Box flexDirection="column" gap={1} marginTop={1}>
+      <Text bold>API Base URL</Text>
+      <Text dimColor>Enter base URL (leave empty for https://api.openai.com/v1):</Text>
+      <TextInput
+        value={baseUrl}
+        onChange={setBaseUrl}
+        onSubmit={(value: string) => {
+          const trimmedUrl = value.trim()
+          saveGlobalConfig(current => ({
+            ...current,
+            openaiApiKey: apiKey,
+            openaiBaseUrl: trimmedUrl || undefined,
+            apiProvider: 'openai',
+          }))
+          process.env.CLAUDE_CODE_USE_OPENAI = '1'
+          onDone()
+        }}
+        placeholder="https://api.openai.com/v1"
+      />
+      <Text dimColor>Leave empty to use default OpenAI endpoint · Press Enter to confirm</Text>
+    </Box>
+  )
+}
+
 export function ConsoleOAuthFlow({
   onDone,
   startingMessage,
@@ -447,6 +510,9 @@ function OAuthStatusMessage(t0) {
           }, {
             label: <Text>OpenAI Codex account ·{" "}<Text dimColor={true}>ChatGPT Plus/Pro subscription</Text>{"\n"}</Text>,
             value: "codex"
+          }, {
+            label: <Text>OpenAI-compatible API ·{" "}<Text dimColor={true}>Use any OpenAI-format API with your own key</Text>{"\n"}</Text>,
+            value: "apikey"
           }];
           $[5] = t6;
         } else {
@@ -460,6 +526,8 @@ function OAuthStatusMessage(t0) {
                 setOAuthStatus({
                   state: "platform_setup"
                 });
+              } else if (value_0 === "apikey") {
+                setOAuthStatus({ state: "apikey_setup" });
               } else if (value_0 === "codex") {
                 logEvent("tengu_oauth_codex_selected", {});
                 setLoginWithCodex(true);
@@ -554,6 +622,8 @@ function OAuthStatusMessage(t0) {
         }
         return t8;
       }
+    case "apikey_setup":
+      return <ThirdPartyApiKeySetup onDone={onDone} onBack={() => setOAuthStatus({ state: "idle" })} />;
     case "waiting_for_login":
       {
         let t1;
