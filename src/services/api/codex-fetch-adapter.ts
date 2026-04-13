@@ -700,7 +700,7 @@ async function translateCodexStreamToAnthropic(
           JSON.stringify({
             type: 'message_delta',
             delta: { stop_reason: stopReason, stop_sequence: null },
-            usage: { output_tokens: outputTokens },
+            usage: { input_tokens: inputTokens, output_tokens: outputTokens },
           }),
         ),
       ),

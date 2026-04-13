@@ -451,7 +451,6 @@ function buildFetch(
       logForDebugging(
         `[API REQUEST] ${new URL(url).pathname}${id ? ` ${CLIENT_REQUEST_ID_HEADER}=${id}` : ''} source=${source ?? 'unknown'}`,
       )
-
       if (
         url.includes('/v1/messages') &&
         headers.has('anthropic-version') &&

@@ -263,19 +263,12 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
       // named. dev:true here is for the flag label in ChannelsNotice
       // (hasNonDev check); the allowlist bypass it also grants is moot
       // since the gate blocks upstream.
-      const {
-        DevChannelsDialog
-      } = await import('./components/DevChannelsDialog.js');
-      await showSetupDialog(root, done => <DevChannelsDialog channels={devChannels} onAccept={() => {
-        // Mark dev entries per-entry so the allowlist bypass doesn't leak
-        // to --channels entries when both flags are passed.
-        setAllowedChannels([...getAllowedChannels(), ...devChannels.map(c => ({
-          ...c,
-          dev: true
-        }))]);
-        setHasDevChannels(true);
-        void done();
-      }} />);
+      // Auto-accept: mark dev entries without showing a confirmation dialog.
+      setAllowedChannels([...getAllowedChannels(), ...devChannels.map(c => ({
+        ...c,
+        dev: true
+      }))]);
+      setHasDevChannels(true);
     }
   }
 
