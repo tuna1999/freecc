@@ -271,6 +271,7 @@ export type GlobalConfig = {
   anthropicCompatBaseUrl?: string
   anthropicCompatModel?: string
   anthropicCompatAvailableModels?: string[]
+  fallbackModel?: string // Model to fall back to when primary model is overloaded
   iterm2KeyBindingInstalled?: boolean // Legacy - keeping for backward compatibility
   editorMode?: EditorMode
   bypassPermissionsModeAccepted?: boolean

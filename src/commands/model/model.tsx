@@ -258,12 +258,14 @@ function ShowModelAndClose(t0) {
   const mainLoopModel = useAppState(_temp7);
   const mainLoopModelForSession = useAppState(_temp8);
   const effortValue = useAppState(_temp9);
+  const fallbackModel = useAppState(s => s.fallbackModel);
   const displayModel = renderModelLabel(mainLoopModel);
   const effortInfo = effortValue !== undefined ? ` (effort: ${effortValue})` : "";
+  const fallbackInfo = fallbackModel ? `\nFallback model: ${chalk.bold(fallbackModel)}` : "";
   if (mainLoopModelForSession) {
-    onDone(`Current model: ${chalk.bold(renderModelLabel(mainLoopModelForSession))} (session override from plan mode)\nBase model: ${displayModel}${effortInfo}`);
+    onDone(`Current model: ${chalk.bold(renderModelLabel(mainLoopModelForSession))} (session override from plan mode)\nBase model: ${displayModel}${effortInfo}${fallbackInfo}`);
   } else {
-    onDone(`Current model: ${displayModel}${effortInfo}`);
+    onDone(`Current model: ${displayModel}${effortInfo}${fallbackInfo}`);
   }
   return null;
 }
@@ -316,17 +318,85 @@ function ModelPickerWithRefetch({ onDone }: { onDone: Parameters<LocalJSXCommand
   return <ModelPickerWrapper onDone={onDone} />
 }
 
+function FallbackModelEntry({ onDone }: { onDone: Parameters<LocalJSXCommandCall>[0] }): React.ReactNode {
+  const fallbackModel = useAppState(s => s.fallbackModel)
+  const mainLoopModel = useAppState(s => s.mainLoopModel)
+  const [mode, setMode] = React.useState<'menu' | 'input'>('menu')
+  const [inputValue, setInputValue] = React.useState(fallbackModel ?? '')
+  const [inputCursor, setInputCursor] = React.useState(fallbackModel?.length ?? 0)
+  const setAppState = useSetAppState()
+
+  useInput((_input, key) => {
+    if (key.escape) setMode('menu')
+  }, { isActive: mode === 'input' })
+
+  if (mode === 'input') {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Fallback Model ID</Text>
+        <Text dimColor>Enter the model to fall back to when the primary model is overloaded:</Text>
+        <TextInput
+          value={inputValue}
+          onChange={setInputValue}
+          cursorOffset={inputCursor}
+          onChangeCursorOffset={setInputCursor}
+          onSubmit={(value: string) => {
+            const trimmed = value.trim()
+            if (!trimmed) return
+            if (trimmed === (mainLoopModel ?? '')) {
+              onDone(`Fallback model cannot be the same as the main model`, { display: 'system' })
+              return
+            }
+            setAppState(prev => ({ ...prev, fallbackModel: trimmed }))
+            onDone(`Set fallback model to ${chalk.bold(trimmed)}`)
+          }}
+          placeholder="claude-sonnet-4-6"
+          focus={true}
+          showCursor={true}
+        />
+        <Text dimColor>Press Esc to go back</Text>
+      </Box>
+    )
+  }
+
+  const currentLabel = fallbackModel ? chalk.bold(fallbackModel) : chalk.dim('none')
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Text>Current fallback model: {currentLabel}</Text>
+      <Select
+        options={[
+          { value: 'set', label: 'Set fallback model', description: 'Enter a model ID to use as fallback' },
+          ...(fallbackModel ? [{ value: 'clear', label: 'Clear fallback model', description: 'Disable automatic model fallback' }] : []),
+        ]}
+        onChange={(value: string) => {
+          if (value === 'set') {
+            setMode('input')
+          } else if (value === 'clear') {
+            setAppState(prev => ({ ...prev, fallbackModel: null }))
+            onDone(`Cleared fallback model`)
+          }
+        }}
+        onCancel={() => {
+          onDone(`Kept fallback model as ${currentLabel}`, { display: 'system' })
+        }}
+      />
+    </Box>
+  )
+}
+
 function ModelCommandEntry({ onDone }: { onDone: Parameters<LocalJSXCommandCall>[0] }): React.ReactNode {
-  const [mode, setMode] = React.useState<'initial' | 'list' | 'manual'>('initial')
+  const [mode, setMode] = React.useState<'initial' | 'list' | 'manual' | 'fallback'>('initial')
   const [manualModel, setManualModel] = React.useState('')
   const [manualCursor, setManualCursor] = React.useState(0)
   const setAppState = useSetAppState()
+  const fallbackModel = useAppState(s => s.fallbackModel)
 
   useInput((_input, key) => {
     if (key.escape) setMode('initial')
   }, { isActive: mode === 'manual' })
 
   if (mode === 'list') return <ModelPickerWithRefetch onDone={onDone} />
+  if (mode === 'fallback') return <FallbackModelEntry onDone={onDone} />
 
   if (mode === 'manual') {
     return (
@@ -354,14 +424,16 @@ function ModelCommandEntry({ onDone }: { onDone: Parameters<LocalJSXCommandCall>
     )
   }
 
+  const fallbackDesc = fallbackModel ? `Currently: ${fallbackModel}` : 'Auto-switch when primary model is overloaded'
   return (
     <Box flexDirection="column" gap={1}>
       <Select
         options={[
           { value: 'list', label: 'Browse available models', description: 'Select from the model list' },
           { value: 'manual', label: 'Enter model ID', description: 'Type a custom model ID manually' },
+          { value: 'fallback', label: 'Set fallback model', description: fallbackDesc },
         ]}
-        onChange={(value: string) => setMode(value as 'list' | 'manual')}
+        onChange={(value: string) => setMode(value as 'list' | 'manual' | 'fallback')}
         onCancel={() => {
           const current = renderModelLabel(null)
           onDone(`Kept model as ${chalk.bold(current)}`, { display: 'system' })

@@ -2801,6 +2801,7 @@ export function REPL({
       systemContext,
       canUseTool,
       toolUseContext,
+      fallbackModel: store.getState().fallbackModel ?? undefined,
       querySource: getQuerySourceForREPL()
     })) {
       onQueryEvent(event);

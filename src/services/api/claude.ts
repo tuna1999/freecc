@@ -2556,7 +2556,7 @@ async function* queryModel(
           thinkingConfig,
           ...(isFastModeEnabled() && { fastMode: isFastMode }),
           signal,
-          initialConsecutive529Errors: is529Error(streamingError) ? 1 : 0,
+          initialConsecutive529Errors: (is529Error(streamingError) || (streamingError instanceof APIError && streamingError.status === 429)) ? 1 : 0,
           querySource: options.querySource,
         },
         paramsFromContext,

@@ -133,6 +133,14 @@ export function onChangeAppState({
     }
   }
 
+  // fallbackModel: persist to GlobalConfig
+  if (newState.fallbackModel !== oldState.fallbackModel) {
+    saveGlobalConfig(current => ({
+      ...current,
+      fallbackModel: newState.fallbackModel ?? undefined,
+    }))
+  }
+
   // expandedView → persist as showExpandedTodos + showSpinnerTree for backwards compat
   if (newState.expandedView !== oldState.expandedView) {
     const showExpandedTodos = newState.expandedView === 'tasks'

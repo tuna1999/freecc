@@ -91,6 +91,7 @@ export type AppState = DeepImmutable<{
   verbose: boolean
   mainLoopModel: ModelSetting
   mainLoopModelForSession: ModelSetting
+  fallbackModel: string | null
   statusLineText: string | undefined
   expandedView: 'none' | 'tasks' | 'teammates'
   isBriefOnly: boolean
@@ -472,6 +473,7 @@ export function getDefaultAppState(): AppState {
     verbose: false,
     mainLoopModel: null, // alias, full name (as with --model or env var), or null (default)
     mainLoopModelForSession: null,
+    fallbackModel: null, // model to fall back to when primary is overloaded, or null (disabled)
     statusLineText: undefined,
     expandedView: 'none',
     isBriefOnly: false,
