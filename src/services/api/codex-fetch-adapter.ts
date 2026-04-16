@@ -343,8 +343,11 @@ async function translateCodexStreamToAnthropic(
       try {
         const reader = codexResponse.body?.getReader()
         if (!reader) {
-          emitTextBlock(controller, encoder, contentBlockIndex, 'Error: No response body')
-          finishStream(controller, encoder, outputTokens, inputTokens, false)
+          // Surface as proper error instead of inline text so the SDK
+          // propagates it through withRetry → query.ts error handler.
+          controller.error(
+            new Error('Provider returned empty response body - connection may have been dropped')
+          )
           return
         }
 
@@ -578,28 +581,12 @@ async function translateCodexStreamToAnthropic(
           }
         }
       } catch (err) {
-        // If we're in the middle of a text block, emit the error there
-        if (!currentTextBlockStarted) {
-          controller.enqueue(
-            encoder.encode(
-              formatSSE('content_block_start', JSON.stringify({
-                type: 'content_block_start',
-                index: contentBlockIndex,
-                content_block: { type: 'text', text: '' },
-              })),
-            ),
-          )
-          currentTextBlockStarted = true
-        }
-        controller.enqueue(
-          encoder.encode(
-            formatSSE('content_block_delta', JSON.stringify({
-              type: 'content_block_delta',
-              index: contentBlockIndex,
-              delta: { type: 'text_delta', text: `\n\n[Error: ${String(err)}]` },
-            })),
-          ),
-        )
+        // Terminate the stream with an error so the Anthropic SDK
+        // propagates it through withRetry → claude.ts → query.ts
+        // instead of silently embedding it as inline text.
+        const msg = err instanceof Error ? err.message : String(err)
+        controller.error(new Error(`Provider stream error: ${msg}`))
+        return
       }
 
       // Close any remaining open blocks
@@ -793,6 +780,7 @@ export function createOpenAIApiFetch(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(codexBody),
+      ...(init?.signal ? { signal: init.signal } : {}),
     })
 
     if (!codexResponse.ok) {
@@ -870,6 +858,7 @@ export function createCodexFetch(
         'OpenAI-Beta': 'responses=experimental',
       },
       body: JSON.stringify(codexBody),
+      ...(init?.signal ? { signal: init.signal } : {}),
     })
 
     if (!codexResponse.ok) {

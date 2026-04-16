@@ -622,10 +622,12 @@ function AnthropicCompatApiKeySetup({
   onChangeAPIKey: () => void
 }): React.ReactNode {
   const cfg = getGlobalConfig()
-  const [step, setStep] = React.useState<'base-url' | 'api-key' | 'model'>('base-url')
+  const [step, setStep] = React.useState<'base-url' | 'api-key' | 'loading' | 'model-select' | 'model'>('base-url')
   const [baseUrl, setBaseUrl] = React.useState(cfg.anthropicCompatBaseUrl ?? '')
   const [apiKey, setApiKey] = React.useState(cfg.anthropicCompatApiKey ?? '')
   const [model, setModel] = React.useState(cfg.anthropicCompatModel ?? '')
+  const [models, setModels] = React.useState<Array<{ id: string }>>([])
+  const [fetchError, setFetchError] = React.useState<string>('')
   const [baseUrlCursor, setBaseUrlCursor] = React.useState(cfg.anthropicCompatBaseUrl?.length ?? 0)
   const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.anthropicCompatApiKey?.length ?? 0)
   const [modelCursor, setModelCursor] = React.useState(cfg.anthropicCompatModel?.length ?? 0)
@@ -634,8 +636,10 @@ function AnthropicCompatApiKeySetup({
     if (!key.escape) return
     if (step === 'base-url') onBack()
     else if (step === 'api-key') setStep('base-url')
+    else if (step === 'loading') setStep('api-key')
+    else if (step === 'model-select') setStep('api-key')
     else if (step === 'model') setStep('api-key')
-  }, { isActive: step === 'base-url' || step === 'api-key' || step === 'model' })
+  }, { isActive: step === 'base-url' || step === 'api-key' || step === 'loading' || step === 'model-select' || step === 'model' })
 
   function saveAndDone(modelId?: string) {
     saveGlobalConfig(current => ({
@@ -651,6 +655,78 @@ function AnthropicCompatApiKeySetup({
     process.env.CLAUDE_CODE_USE_ANTHROPIC_COMPAT = '1'
     onChangeAPIKey()
     onDone(`Switched provider to ${chalk.bold(getProviderLabel('anthropicCompat'))} at ${chalk.dim(baseUrl)}`)
+  }
+
+  function fetchModels(url: string, key: string) {
+    const base = url.replace(/\/+$/, '')
+    setStep('loading')
+    // Try multiple paths: /models, /v1/models
+    const paths = ['/models', '/v1/models']
+    let lastError = ''
+
+    function tryNext(idx: number) {
+      if (idx >= paths.length) {
+        setFetchError(lastError)
+        setStep('model')
+        return
+      }
+      const fetchUrl = `${base}${paths[idx]}`
+      globalThis.fetch(fetchUrl, {
+        headers: {
+          'x-api-key': key,
+          Authorization: `Bearer ${key}`,
+        },
+      })
+        .then(r => {
+          if (!r.ok) {
+            lastError = `${paths[idx]} → HTTP ${r.status}`
+            tryNext(idx + 1)
+            return null
+          }
+          return r.json()
+        })
+        .then((data: unknown | null) => {
+          if (data === null) return
+          // Handle { data: [{ id: ... }] } (OpenAI/Anthropic style)
+          let list: Array<{ id: string }> = []
+          const d = data as Record<string, unknown>
+          if (Array.isArray(d.data)) {
+            list = (d.data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+              id: String(m.id ?? m.name ?? ''),
+            })).filter(m => m.id)
+          }
+          // Handle { models: [{ name: ... }] } (Ollama-style)
+          if (list.length === 0 && Array.isArray(d.models)) {
+            list = (d.models as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+              id: String(m.id ?? m.name ?? ''),
+            })).filter(m => m.id)
+          }
+          // Handle direct array [{ id: ... }]
+          if (list.length === 0 && Array.isArray(data)) {
+            list = (data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+              id: String(m.id ?? m.name ?? ''),
+            })).filter(m => m.id)
+          }
+          if (list.length > 0) {
+            const sorted = list.sort((a, b) => a.id.localeCompare(b.id))
+            setModels(sorted)
+            saveGlobalConfig(current => ({
+              ...current,
+              anthropicCompatAvailableModels: sorted.map(m => m.id),
+            }))
+            setStep('model-select')
+          } else {
+            lastError = `${paths[idx]} → no models in response`
+            tryNext(idx + 1)
+          }
+        })
+        .catch((err: Error) => {
+          lastError = `${paths[idx]} → ${err.message}`
+          tryNext(idx + 1)
+        })
+    }
+
+    tryNext(0)
   }
 
   if (step === 'base-url') {
@@ -692,7 +768,7 @@ function AnthropicCompatApiKeySetup({
             const trimmed = value.trim()
             if (!trimmed) return
             setApiKey(trimmed)
-            setStep('model')
+            fetchModels(baseUrl, trimmed)
           }}
           placeholder="sk-..."
           focus={true}
@@ -703,37 +779,55 @@ function AnthropicCompatApiKeySetup({
     )
   }
 
-  if (step === 'model') {
+  if (step === 'loading') {
     return (
       <Box flexDirection="column" gap={1}>
-        <Text bold>Model ID</Text>
-        <Text dimColor>Enter the model ID to use:</Text>
-        <TextInput
-          value={model}
-          onChange={setModel}
-          cursorOffset={modelCursor}
-          onChangeCursorOffset={setModelCursor}
-          onSubmit={(value: string) => {
-            const trimmed = value.trim()
-            saveAndDone(trimmed || undefined)
-          }}
-          placeholder="claude-sonnet-4-6"
-          focus={true}
-          showCursor={true}
-        />
-        <Text dimColor>Press Enter to confirm · Esc to go back</Text>
+        <Spinner label="Fetching available models..." />
       </Box>
     )
   }
 
+  if (step === 'model-select') {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Select Model</Text>
+        <Text dimColor>Choose the model to use with this provider:</Text>
+        <Select
+          options={models.map(m => ({ label: m.id, value: m.id }))}
+          onChange={(modelId: string) => saveAndDone(modelId)}
+          onCancel={() => setStep('api-key')}
+        />
+      </Box>
+    )
+  }
+
+  // step === 'model' — fallback manual entry when fetch fails or returns empty
   return (
     <Box flexDirection="column" gap={1}>
-      <Text bold>Select Model</Text>
-      <Text dimColor>Choose the model to use with this provider:</Text>
-      <Select
-        options={models.map(m => ({ label: m.id, value: m.id }))}
-        onChange={(modelId: string) => saveAndDone(pendingKey, modelId)}
+      <Text bold>Model ID</Text>
+      {fetchError ? (
+        <Box flexDirection="column">
+          <Text color="yellow">Could not auto-detect models (tried /models, /v1/models):</Text>
+          <Text color="yellow">{fetchError}</Text>
+        </Box>
+      ) : (
+        <Text dimColor>Models fetched but no match found.</Text>
+      )}
+      <Text dimColor>Enter the model ID to use:</Text>
+      <TextInput
+        value={model}
+        onChange={setModel}
+        cursorOffset={modelCursor}
+        onChangeCursorOffset={setModelCursor}
+        onSubmit={(value: string) => {
+          const trimmed = value.trim()
+          saveAndDone(trimmed || undefined)
+        }}
+        placeholder="claude-sonnet-4-6"
+        focus={true}
+        showCursor={true}
       />
+      <Text dimColor>Press Enter to confirm · Esc to go back</Text>
     </Box>
   )
 }

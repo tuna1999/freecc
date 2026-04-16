@@ -440,16 +440,31 @@ export function useTextInput({
     }
 
     // Fix Issue #1853: Filter DEL characters that interfere with backspace in SSH/tmux
-    // In SSH/tmux environments, backspace generates both key events and raw DEL chars
+    // In SSH/tmux environments, backspace generates both key events and raw DEL chars.
+    // Also handles IME input (e.g., Unikey) that sends DEL + composed char in one chunk
+    // (e.g., "\x7fô" to replace base "o" with "ô") — must process both DELs and text.
     if (!key.backspace && !key.delete && input.includes('\x7f')) {
-      const delCount = (input.match(/\x7f/g) || []).length
-
-      // Apply all DEL characters as backspace operations synchronously
-      // Try to delete tokens first, fall back to character backspace
       let currentCursor = cursor
-      for (let i = 0; i < delCount; i++) {
-        currentCursor =
-          currentCursor.deleteTokenBefore() ?? currentCursor.backspace()
+      let idx = 0
+
+      while (idx < input.length) {
+        if (input[idx] === '\x7f') {
+          // Apply DEL as backspace (prefer token delete, fall back to char)
+          currentCursor =
+            currentCursor.deleteTokenBefore() ?? currentCursor.backspace()
+          idx++
+        } else {
+          // Collect non-DEL text and insert it
+          let start = idx
+          while (idx < input.length && input[idx] !== '\x7f') idx++
+          const text = stripAnsi(input.slice(start, idx))
+            // eslint-disable-next-line custom-rules/no-lookbehind-regex
+            .replace(/(?<=[^\\\r\n])\r$/, '')
+            .replace(/\r/g, '\n')
+          if (text) {
+            currentCursor = currentCursor.insert(text)
+          }
+        }
       }
 
       // Update state once with the final result

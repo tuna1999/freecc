@@ -193,39 +193,11 @@ async function translateChatCompletionsStreamToAnthropic(
       try {
         const reader = response.body?.getReader()
         if (!reader) {
-          controller.enqueue(
-            encoder.encode(
-              formatSSE(
-                'content_block_start',
-                JSON.stringify({
-                  type: 'content_block_start',
-                  index: contentBlockIndex,
-                  content_block: { type: 'text', text: '' },
-                }),
-              ),
-            ),
+          // Surface as proper error instead of inline text so the SDK
+          // propagates it through withRetry → query.ts error handler.
+          controller.error(
+            new Error('Provider returned empty response body - connection may have been dropped')
           )
-          controller.enqueue(
-            encoder.encode(
-              formatSSE(
-                'content_block_delta',
-                JSON.stringify({
-                  type: 'content_block_delta',
-                  index: contentBlockIndex,
-                  delta: { type: 'text_delta', text: 'Error: No response body' },
-                }),
-              ),
-            ),
-          )
-          controller.enqueue(
-            encoder.encode(
-              formatSSE(
-                'content_block_stop',
-                JSON.stringify({ type: 'content_block_stop', index: contentBlockIndex }),
-              ),
-            ),
-          )
-          finishStream(controller, encoder, inputTokens, outputTokens, false)
           return
         }
 
@@ -391,33 +363,21 @@ async function translateChatCompletionsStreamToAnthropic(
           }
         }
       } catch (err) {
-        if (!textBlockOpen) {
-          controller.enqueue(
-            encoder.encode(
-              formatSSE(
-                'content_block_start',
-                JSON.stringify({
-                  type: 'content_block_start',
-                  index: contentBlockIndex,
-                  content_block: { type: 'text', text: '' },
-                }),
-              ),
-            ),
-          )
-          textBlockOpen = true
-        }
-        controller.enqueue(
-          encoder.encode(
-            formatSSE(
-              'content_block_delta',
-              JSON.stringify({
-                type: 'content_block_delta',
-                index: contentBlockIndex,
-                delta: { type: 'text_delta', text: `\n\n[Error: ${String(err)}]` },
-              }),
-            ),
-          ),
+        // Terminate the stream with an error so the Anthropic SDK
+        // propagates it through withRetry → claude.ts → query.ts
+        // instead of silently embedding it as inline text.
+        const msg = err instanceof Error ? err.message : String(err)
+        controller.error(new Error(`Provider stream error: ${msg}`))
+        return
+      }
+
+      // Detect premature stream termination: connection dropped cleanly
+      // (EOF without error) before any content was produced.
+      if (!hadToolCalls && !textBlockOpen && outputTokens === 0) {
+        controller.error(
+          new Error('Provider stream ended without producing any content')
         )
+        return
       }
 
       // Close text block if still open
@@ -579,6 +539,7 @@ export function createChatCompletionsFetch(
         ...extraHeaders,
       },
       body: JSON.stringify(oaiBody),
+      ...(init?.signal ? { signal: init.signal } : {}),
     })
 
     if (!apiResponse.ok) {

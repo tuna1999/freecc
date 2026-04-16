@@ -142,6 +142,16 @@ function tokenize(
           seqStart = i
           result.state = 'escape'
           i++
+        } else if (code === 0x08 || code === 0x7f) {
+          // Split BS (0x08) and DEL (0x7F) into their own tokens.
+          // IMEs like Unikey (Vietnamese) send DEL + composed char in one
+          // stdin chunk (e.g. "\x7fô" to replace base "o" with "ô").
+          // Without splitting, parseKeypress sees the combined string and
+          // can't match s === '\x7f' for backspace, losing the character.
+          flushText()
+          tokens.push({ type: 'text', value: data.slice(i, i + 1) })
+          textStart = i + 1
+          i++
         } else {
           i++
         }

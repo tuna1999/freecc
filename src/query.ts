@@ -1036,8 +1036,9 @@ async function* queryLoop(
             './utils/computerUse/cleanup.js'
           )
           await cleanupComputerUseAfterTurn(toolUseContext)
-        } catch {
-          // Failures are silent — this is dogfooding cleanup, not critical path
+        } catch (cleanupErr) {
+          // Cleanup failures should not crash the session, but log for diagnostics
+          logForDebugging(`Computer use cleanup failed: ${String(cleanupErr)}`, { level: 'warn' })
         }
       }
 
@@ -1492,8 +1493,9 @@ async function* queryLoop(
             './utils/computerUse/cleanup.js'
           )
           await cleanupComputerUseAfterTurn(toolUseContext)
-        } catch {
-          // Failures are silent — this is dogfooding cleanup, not critical path
+        } catch (cleanupErr) {
+          // Cleanup failures should not crash the session, but log for diagnostics
+          logForDebugging(`Computer use cleanup failed: ${String(cleanupErr)}`, { level: 'warn' })
         }
       }
       // Skip the interruption message for submit-interrupts — the queued

@@ -280,31 +280,56 @@ function _temp7(s) {
 }
 function ModelPickerWithRefetch({ onDone }: { onDone: Parameters<LocalJSXCommandCall>[0] }): React.ReactNode {
   const provider = getAPIProvider()
-  const needsFetch = provider === 'openrouter'
+  const needsFetch = provider === 'openrouter' || provider === 'anthropicCompat'
   const [fetching, setFetching] = React.useState(needsFetch)
 
   React.useEffect(() => {
     if (!needsFetch) return
 
     const cfg = getGlobalConfig()
-    if (!cfg.openrouterApiKey) { setFetching(false); return }
-    const url = `${OPENROUTER_DEFAULT_BASE_URL}/models`
-    const headers = { Authorization: `Bearer ${cfg.openrouterApiKey}` }
 
-    globalThis.fetch(url, { headers })
-      .then(r => r.json())
-      .then((data: unknown) => {
-        const d = data as { data?: unknown }
-        const list: Array<{ id: string }> = Array.isArray(d.data)
-          ? (d as { data: Array<{ id: string }> }).data
-          : []
-        if (list.length > 0) {
-          const sorted = list.map(m => m.id).sort((a, b) => a.localeCompare(b))
-          saveGlobalConfig(current => ({ ...current, openrouterAvailableModels: sorted }))
-        }
-      })
-      .catch(() => {})
-      .finally(() => setFetching(false))
+    if (provider === 'openrouter') {
+      if (!cfg.openrouterApiKey) { setFetching(false); return }
+      const url = `${OPENROUTER_DEFAULT_BASE_URL}/models`
+      const headers = { Authorization: `Bearer ${cfg.openrouterApiKey}` }
+
+      globalThis.fetch(url, { headers })
+        .then(r => r.json())
+        .then((data: unknown) => {
+          const d = data as { data?: unknown }
+          const list: Array<{ id: string }> = Array.isArray(d.data)
+            ? (d as { data: Array<{ id: string }> }).data
+            : []
+          if (list.length > 0) {
+            const sorted = list.map(m => m.id).sort((a, b) => a.localeCompare(b))
+            saveGlobalConfig(current => ({ ...current, openrouterAvailableModels: sorted }))
+          }
+        })
+        .catch(() => {})
+        .finally(() => setFetching(false))
+    } else if (provider === 'anthropicCompat') {
+      if (!cfg.anthropicCompatBaseUrl || !cfg.anthropicCompatApiKey) { setFetching(false); return }
+      const base = cfg.anthropicCompatBaseUrl.replace(/\/+$/, '')
+      const headers = {
+        'x-api-key': cfg.anthropicCompatApiKey,
+        Authorization: `Bearer ${cfg.anthropicCompatApiKey}`,
+      }
+
+      globalThis.fetch(`${base}/models`, { headers })
+        .then(r => r.json())
+        .then((data: unknown) => {
+          const d = data as { data?: unknown }
+          const list: Array<{ id: string }> = Array.isArray(d.data)
+            ? (d as { data: Array<{ id: string }> }).data
+            : []
+          if (list.length > 0) {
+            const sorted = list.map(m => m.id).sort((a, b) => a.localeCompare(b))
+            saveGlobalConfig(current => ({ ...current, anthropicCompatAvailableModels: sorted }))
+          }
+        })
+        .catch(() => {})
+        .finally(() => setFetching(false))
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (fetching) {
@@ -318,10 +343,19 @@ function ModelPickerWithRefetch({ onDone }: { onDone: Parameters<LocalJSXCommand
   return <ModelPickerWrapper onDone={onDone} />
 }
 
+function getFetchedModelsForProvider(): string[] {
+  const provider = getAPIProvider()
+  const cfg = getGlobalConfig()
+  if (provider === 'anthropicCompat') return cfg.anthropicCompatAvailableModels ?? []
+  if (provider === 'openrouter') return cfg.openrouterAvailableModels ?? []
+  if (provider === 'openai') return cfg.openaiAvailableModels ?? []
+  return []
+}
+
 function FallbackModelEntry({ onDone }: { onDone: Parameters<LocalJSXCommandCall>[0] }): React.ReactNode {
   const fallbackModel = useAppState(s => s.fallbackModel)
   const mainLoopModel = useAppState(s => s.mainLoopModel)
-  const [mode, setMode] = React.useState<'menu' | 'input'>('menu')
+  const [mode, setMode] = React.useState<'menu' | 'input' | 'select'>('menu')
   const [inputValue, setInputValue] = React.useState(fallbackModel ?? '')
   const [inputCursor, setInputCursor] = React.useState(fallbackModel?.length ?? 0)
   const setAppState = useSetAppState()
@@ -329,6 +363,26 @@ function FallbackModelEntry({ onDone }: { onDone: Parameters<LocalJSXCommandCall
   useInput((_input, key) => {
     if (key.escape) setMode('menu')
   }, { isActive: mode === 'input' })
+
+  const availableModels = getFetchedModelsForProvider()
+
+  if (mode === 'select') {
+    const filteredModels = availableModels.filter(m => m !== (mainLoopModel ?? ''))
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Select Fallback Model</Text>
+        <Text dimColor>Choose the model to fall back to when the primary model is overloaded:</Text>
+        <Select
+          options={filteredModels.map(m => ({ label: m, value: m }))}
+          onChange={(modelId: string) => {
+            setAppState(prev => ({ ...prev, fallbackModel: modelId }))
+            onDone(`Set fallback model to ${chalk.bold(modelId)}`)
+          }}
+          onCancel={() => setMode('menu')}
+        />
+      </Box>
+    )
+  }
 
   if (mode === 'input') {
     return (
@@ -360,16 +414,22 @@ function FallbackModelEntry({ onDone }: { onDone: Parameters<LocalJSXCommandCall
   }
 
   const currentLabel = fallbackModel ? chalk.bold(fallbackModel) : chalk.dim('none')
+  const menuOptions = [
+    ...(availableModels.length > 0
+      ? [{ value: 'select', label: 'Select from available models', description: `Choose from ${availableModels.length} fetched models` }]
+      : []),
+    { value: 'set', label: 'Enter model ID', description: 'Type a custom model ID to use as fallback' },
+    ...(fallbackModel ? [{ value: 'clear', label: 'Clear fallback model', description: 'Disable automatic model fallback' }] : []),
+  ]
   return (
     <Box flexDirection="column" gap={1}>
       <Text>Current fallback model: {currentLabel}</Text>
       <Select
-        options={[
-          { value: 'set', label: 'Set fallback model', description: 'Enter a model ID to use as fallback' },
-          ...(fallbackModel ? [{ value: 'clear', label: 'Clear fallback model', description: 'Disable automatic model fallback' }] : []),
-        ]}
+        options={menuOptions}
         onChange={(value: string) => {
-          if (value === 'set') {
+          if (value === 'select') {
+            setMode('select')
+          } else if (value === 'set') {
             setMode('input')
           } else if (value === 'clear') {
             setAppState(prev => ({ ...prev, fallbackModel: null }))

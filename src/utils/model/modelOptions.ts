@@ -338,6 +338,40 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     ]
   }
 
+  // 3P providers: check BEFORE subscription so custom provider models are shown
+  // Anthropic-compatible: show fetched models from config
+  if (isAnthropicCompatUser()) {
+    const cfg = getGlobalConfig()
+    if (cfg.anthropicCompatAvailableModels && cfg.anthropicCompatAvailableModels.length > 0) {
+      return cfg.anthropicCompatAvailableModels.map(id => ({
+        value: id,
+        label: id,
+        description: '',
+      }))
+    }
+    if (cfg.anthropicCompatModel) {
+      return [{ value: cfg.anthropicCompatModel, label: cfg.anthropicCompatModel, description: '' }]
+    }
+    return []
+  }
+
+  // OpenRouter: show fetched models from config
+  if (isOpenRouterUser()) {
+    const cfg = getGlobalConfig()
+    if (cfg.openrouterAvailableModels && cfg.openrouterAvailableModels.length > 0) {
+      return cfg.openrouterAvailableModels.map(id => ({
+        value: id,
+        label: id,
+        description: '',
+      }))
+    }
+    // Fallback if no models cached yet
+    if (cfg.openrouterModel) {
+      return [{ value: cfg.openrouterModel, label: cfg.openrouterModel, description: '' }]
+    }
+    return []
+  }
+
   if (isClaudeAISubscriber()) {
     if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
       // Max and Team Premium users: Opus is default, show Sonnet as alternative
@@ -372,39 +406,6 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
 
     standardOptions.push(MaxHaiku45Option)
     return standardOptions
-  }
-
-  // Anthropic-compatible: show fetched models from config
-  if (isAnthropicCompatUser()) {
-    const cfg = getGlobalConfig()
-    if (cfg.anthropicCompatAvailableModels && cfg.anthropicCompatAvailableModels.length > 0) {
-      return cfg.anthropicCompatAvailableModels.map(id => ({
-        value: id,
-        label: id,
-        description: '',
-      }))
-    }
-    if (cfg.anthropicCompatModel) {
-      return [{ value: cfg.anthropicCompatModel, label: cfg.anthropicCompatModel, description: '' }]
-    }
-    return []
-  }
-
-  // OpenRouter: show fetched models from config
-  if (isOpenRouterUser()) {
-    const cfg = getGlobalConfig()
-    if (cfg.openrouterAvailableModels && cfg.openrouterAvailableModels.length > 0) {
-      return cfg.openrouterAvailableModels.map(id => ({
-        value: id,
-        label: id,
-        description: '',
-      }))
-    }
-    // Fallback if no models cached yet
-    if (cfg.openrouterModel) {
-      return [{ value: cfg.openrouterModel, label: cfg.openrouterModel, description: '' }]
-    }
-    return []
   }
 
   // PAYG 1P API: Default (Sonnet) + Sonnet 1M + Opus 4.6 + Opus 1M + Haiku
