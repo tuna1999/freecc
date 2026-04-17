@@ -112,6 +112,40 @@ function applyProvider(provider: APIProvider): void {
 }
 
 /**
+ * Shared helper for saving provider config and syncing state across all layers.
+ * Each caller only provides provider-specific config fields and a message.
+ */
+function applyProviderSwitch(params: {
+  provider: APIProvider
+  configFields: Record<string, unknown>
+  modelId?: string
+  message: string
+  setAppState: ReturnType<typeof useSetAppState>
+  onChangeAPIKey: () => void
+  onDone: (msg: string) => void
+}): void {
+  const { provider, configFields, modelId, message, setAppState, onChangeAPIKey, onDone } = params
+
+  saveGlobalConfig(current => ({
+    ...current,
+    ...configFields,
+    apiProvider: provider,
+  }))
+  for (const envVar of PROVIDER_ENV_VARS) {
+    delete process.env[envVar]
+  }
+  const option = PROVIDER_OPTIONS.find(o => o.value === provider)
+  if (option?.envVar) {
+    process.env[option.envVar] = '1'
+  }
+  setMainLoopModelOverride(modelId || undefined)
+  updateSettingsForSource('userSettings', { model: modelId || undefined })
+  setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
+  onChangeAPIKey()
+  onDone(message)
+}
+
+/**
  * Check if credentials/config exist for a given provider.
  */
 function hasProviderCredentials(provider: APIProvider): boolean {
@@ -290,28 +324,21 @@ function OpenAIApiKeySetup({
   }, { isActive: step === 'api-key' || step === 'base-url' })
 
   function saveAndDone(modelId?: string) {
-    saveGlobalConfig(current => ({
-      ...current,
-      openaiApiKey: apiKey,
-      openaiBaseUrl: baseUrl || undefined,
-      openaiModel: modelId || undefined,
-      openaiAvailableModels: models.length > 0 ? models.map(m => m.id) : undefined,
-      apiProvider: 'openai',
-    }))
-    for (const envVar of PROVIDER_ENV_VARS) {
-      delete process.env[envVar]
-    }
-    process.env.CLAUDE_CODE_USE_OPENAI = '1'
-    // Update both the bootstrap override and AppState so /model shows the
-    // correct model immediately and the model resolution chain is consistent.
-    setMainLoopModelOverride(modelId || undefined)
-    updateSettingsForSource('userSettings', { model: modelId || undefined })
-    setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
-    onChangeAPIKey()
     const urlMsg = baseUrl ? ` with base URL ${chalk.dim(baseUrl)}` : ''
-    onDone(
-      `Switched provider to ${chalk.bold(getProviderLabel('openai'))} using API key${urlMsg}`,
-    )
+    applyProviderSwitch({
+      provider: 'openai',
+      configFields: {
+        openaiApiKey: apiKey,
+        openaiBaseUrl: baseUrl || undefined,
+        openaiModel: modelId || undefined,
+        openaiAvailableModels: models.length > 0 ? models.map(m => m.id) : undefined,
+      },
+      modelId,
+      message: `Switched provider to ${chalk.bold(getProviderLabel('openai'))} using API key${urlMsg}`,
+      setAppState,
+      onChangeAPIKey,
+      onDone,
+    })
   }
 
   function fetchModels() {
@@ -444,25 +471,20 @@ function OpenAICompatSetup({
   }, { isActive: step !== 'loading' })
 
   function saveAndDone(modelId?: string) {
-    saveGlobalConfig(current => ({
-      ...current,
-      openaiApiKey: apiKey || undefined,
-      openaiBaseUrl: baseUrl,
-      openaiModel: modelId || undefined,
-      openaiAvailableModels: models.length > 0 ? models.map(m => m.id) : undefined,
-      apiProvider: 'openai',
-    }))
-    for (const envVar of PROVIDER_ENV_VARS) {
-      delete process.env[envVar]
-    }
-    process.env.CLAUDE_CODE_USE_OPENAI = '1'
-    setMainLoopModelOverride(modelId || undefined)
-    updateSettingsForSource('userSettings', { model: modelId || undefined })
-    setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
-    onChangeAPIKey()
-    onDone(
-      `Switched provider to ${chalk.bold(getProviderLabel('openai'))} at ${chalk.dim(baseUrl)}`,
-    )
+    applyProviderSwitch({
+      provider: 'openai',
+      configFields: {
+        openaiApiKey: apiKey || undefined,
+        openaiBaseUrl: baseUrl,
+        openaiModel: modelId || undefined,
+        openaiAvailableModels: models.length > 0 ? models.map(m => m.id) : undefined,
+      },
+      modelId,
+      message: `Switched provider to ${chalk.bold(getProviderLabel('openai'))} at ${chalk.dim(baseUrl)}`,
+      setAppState,
+      onChangeAPIKey,
+      onDone,
+    })
   }
 
   function fetchModels(url: string, key: string) {
@@ -659,22 +681,19 @@ function OpenRouterApiKeySetup({
   }, { isActive: step === 'api-key' })
 
   function saveAndDone(modelId?: string) {
-    saveGlobalConfig(current => ({
-      ...current,
-      openrouterApiKey: apiKey,
-      openrouterModel: modelId || undefined,
-      openrouterAvailableModels: models.length > 0 ? models.map(m => m.id) : undefined,
-      apiProvider: 'openrouter',
-    }))
-    for (const envVar of PROVIDER_ENV_VARS) {
-      delete process.env[envVar]
-    }
-    process.env.CLAUDE_CODE_USE_OPENROUTER = '1'
-    setMainLoopModelOverride(modelId || undefined)
-    updateSettingsForSource('userSettings', { model: modelId || undefined })
-    setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
-    onChangeAPIKey()
-    onDone(`Switched provider to ${chalk.bold(getProviderLabel('openrouter'))} using API key`)
+    applyProviderSwitch({
+      provider: 'openrouter',
+      configFields: {
+        openrouterApiKey: apiKey,
+        openrouterModel: modelId || undefined,
+        openrouterAvailableModels: models.length > 0 ? models.map(m => m.id) : undefined,
+      },
+      modelId,
+      message: `Switched provider to ${chalk.bold(getProviderLabel('openrouter'))} using API key`,
+      setAppState,
+      onChangeAPIKey,
+      onDone,
+    })
   }
 
   function fetchModels(key: string) {
@@ -902,22 +921,19 @@ function AnthropicCompatApiKeySetup({
   }, { isActive: step === 'base-url' || step === 'api-key' || step === 'loading' || step === 'model-select' || step === 'model' })
 
   function saveAndDone(modelId?: string) {
-    saveGlobalConfig(current => ({
-      ...current,
-      anthropicCompatApiKey: apiKey,
-      anthropicCompatBaseUrl: baseUrl,
-      anthropicCompatModel: modelId || undefined,
-      apiProvider: 'anthropicCompat',
-    }))
-    for (const envVar of PROVIDER_ENV_VARS) {
-      delete process.env[envVar]
-    }
-    process.env.CLAUDE_CODE_USE_ANTHROPIC_COMPAT = '1'
-    setMainLoopModelOverride(modelId || undefined)
-    updateSettingsForSource('userSettings', { model: modelId || undefined })
-    setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
-    onChangeAPIKey()
-    onDone(`Switched provider to ${chalk.bold(getProviderLabel('anthropicCompat'))} at ${chalk.dim(baseUrl)}`)
+    applyProviderSwitch({
+      provider: 'anthropicCompat',
+      configFields: {
+        anthropicCompatApiKey: apiKey,
+        anthropicCompatBaseUrl: baseUrl,
+        anthropicCompatModel: modelId || undefined,
+      },
+      modelId,
+      message: `Switched provider to ${chalk.bold(getProviderLabel('anthropicCompat'))} at ${chalk.dim(baseUrl)}`,
+      setAppState,
+      onChangeAPIKey,
+      onDone,
+    })
   }
 
   function fetchModels(url: string, key: string) {
