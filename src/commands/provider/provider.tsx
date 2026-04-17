@@ -17,6 +17,8 @@ import { getCodexOAuthTokens, hasAnthropicApiKeyAuth } from '../../utils/auth.js
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { OPENROUTER_DEFAULT_BASE_URL } from '../../services/api/chat-completions-adapter.js'
 import { getAPIProvider, type APIProvider } from '../../utils/model/providers.js'
+import { setMainLoopModelOverride } from '../../bootstrap/state.js'
+import { useSetAppState } from '../../state/AppState.js'
 import { updateSettingsForSource } from '../../utils/settings/settings.js'
 
 const PROVIDER_OPTIONS: Array<{
@@ -97,6 +99,10 @@ function applyProvider(provider: APIProvider): void {
   // Clear stale model from settings — the old provider's model won't work
   // with the new provider. The new provider's default will be used instead.
   updateSettingsForSource('userSettings', { model: undefined })
+
+  // Clear the in-memory model override so model resolution falls through
+  // to the new provider's default instead of reusing the old provider's model.
+  setMainLoopModelOverride(undefined)
 
   // Persist the choice so it survives restarts
   saveGlobalConfig((current) => ({
@@ -269,6 +275,7 @@ function OpenAIApiKeySetup({
   onChangeAPIKey: () => void
 }): React.ReactNode {
   const cfg = getGlobalConfig()
+  const setAppState = useSetAppState()
   const [step, setStep] = React.useState<'api-key' | 'base-url' | 'loading' | 'model-select'>('api-key')
   const [apiKey, setApiKey] = React.useState(cfg.openaiApiKey ?? '')
   const [baseUrl, setBaseUrl] = React.useState(cfg.openaiBaseUrl ?? '')
@@ -295,6 +302,11 @@ function OpenAIApiKeySetup({
       delete process.env[envVar]
     }
     process.env.CLAUDE_CODE_USE_OPENAI = '1'
+    // Update both the bootstrap override and AppState so /model shows the
+    // correct model immediately and the model resolution chain is consistent.
+    setMainLoopModelOverride(modelId || undefined)
+    updateSettingsForSource('userSettings', { model: modelId || undefined })
+    setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
     onChangeAPIKey()
     const urlMsg = baseUrl ? ` with base URL ${chalk.dim(baseUrl)}` : ''
     onDone(
@@ -398,6 +410,230 @@ function OpenAIApiKeySetup({
 }
 
 /**
+ * Setup for OpenAI-compatible API with custom base URL.
+ * Flow: base-url (required) → api-key → loading → model-select → model (fallback).
+ */
+function OpenAICompatSetup({
+  onDone,
+  onBack,
+  onChangeAPIKey,
+}: {
+  onDone: LocalJSXCommandOnDone
+  onBack: () => void
+  onChangeAPIKey: () => void
+}): React.ReactNode {
+  const cfg = getGlobalConfig()
+  const setAppState = useSetAppState()
+  const [step, setStep] = React.useState<'base-url' | 'api-key' | 'loading' | 'model-select' | 'model'>('base-url')
+  const [baseUrl, setBaseUrl] = React.useState(cfg.openaiBaseUrl ?? '')
+  const [apiKey, setApiKey] = React.useState(cfg.openaiApiKey ?? '')
+  const [models, setModels] = React.useState<Array<{ id: string }>>([])
+  const [fetchError, setFetchError] = React.useState('')
+  const [manualModel, setManualModel] = React.useState('')
+  const [baseUrlCursor, setBaseUrlCursor] = React.useState(cfg.openaiBaseUrl?.length ?? 0)
+  const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.openaiApiKey?.length ?? 0)
+  const [modelCursor, setModelCursor] = React.useState(0)
+
+  useInput((_input, key) => {
+    if (!key.escape) return
+    if (step === 'base-url') onBack()
+    else if (step === 'api-key') setStep('base-url')
+    else if (step === 'loading') setStep('api-key')
+    else if (step === 'model-select') setStep('api-key')
+    else if (step === 'model') setStep('api-key')
+  }, { isActive: step !== 'loading' })
+
+  function saveAndDone(modelId?: string) {
+    saveGlobalConfig(current => ({
+      ...current,
+      openaiApiKey: apiKey || undefined,
+      openaiBaseUrl: baseUrl,
+      openaiModel: modelId || undefined,
+      openaiAvailableModels: models.length > 0 ? models.map(m => m.id) : undefined,
+      apiProvider: 'openai',
+    }))
+    for (const envVar of PROVIDER_ENV_VARS) {
+      delete process.env[envVar]
+    }
+    process.env.CLAUDE_CODE_USE_OPENAI = '1'
+    setMainLoopModelOverride(modelId || undefined)
+    updateSettingsForSource('userSettings', { model: modelId || undefined })
+    setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
+    onChangeAPIKey()
+    onDone(
+      `Switched provider to ${chalk.bold(getProviderLabel('openai'))} at ${chalk.dim(baseUrl)}`,
+    )
+  }
+
+  function fetchModels(url: string, key: string) {
+    const base = url.replace(/\/+$/, '')
+    setStep('loading')
+    const paths = ['/v1/models', '/models']
+    let lastError = ''
+
+    function tryNext(idx: number) {
+      if (idx >= paths.length) {
+        setFetchError(lastError)
+        setStep('model')
+        return
+      }
+      const fetchUrl = `${base}${paths[idx]}`
+      const headers: Record<string, string> = {}
+      if (key) {
+        headers.Authorization = `Bearer ${key}`
+      }
+      globalThis.fetch(fetchUrl, { headers })
+        .then(r => {
+          if (!r.ok) {
+            lastError = `${paths[idx]} → HTTP ${r.status}`
+            tryNext(idx + 1)
+            return null
+          }
+          return r.json()
+        })
+        .then((data: unknown | null) => {
+          if (data === null) return
+          let list: Array<{ id: string }> = []
+          const d = data as Record<string, unknown>
+          if (Array.isArray(d.data)) {
+            list = (d.data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+              id: String(m.id ?? m.name ?? ''),
+            })).filter(m => m.id)
+          }
+          if (list.length === 0 && Array.isArray(d.models)) {
+            list = (d.models as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+              id: String(m.id ?? m.name ?? ''),
+            })).filter(m => m.id)
+          }
+          if (list.length === 0 && Array.isArray(data)) {
+            list = (data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+              id: String(m.id ?? m.name ?? ''),
+            })).filter(m => m.id)
+          }
+          if (list.length > 0) {
+            const sorted = list.sort((a, b) => a.id.localeCompare(b.id))
+            setModels(sorted)
+            saveGlobalConfig(current => ({
+              ...current,
+              openaiAvailableModels: sorted.map(m => m.id),
+            }))
+            setStep('model-select')
+          } else {
+            lastError = `${paths[idx]} → no models in response`
+            tryNext(idx + 1)
+          }
+        })
+        .catch((err: Error) => {
+          lastError = `${paths[idx]} → ${err.message}`
+          tryNext(idx + 1)
+        })
+    }
+
+    tryNext(0)
+  }
+
+  if (step === 'base-url') {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Base URL</Text>
+        <Text dimColor>Enter the base URL of your OpenAI-compatible provider:</Text>
+        <TextInput
+          value={baseUrl}
+          onChange={setBaseUrl}
+          cursorOffset={baseUrlCursor}
+          onChangeCursorOffset={setBaseUrlCursor}
+          onSubmit={(value: string) => {
+            const url = value.trim()
+            if (!url) return
+            setBaseUrl(url)
+            setStep('api-key')
+          }}
+          placeholder="http://localhost:11434"
+          focus={true}
+          showCursor={true}
+        />
+        <Text dimColor>Press Esc to go back</Text>
+      </Box>
+    )
+  }
+
+  if (step === 'api-key') {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold>API Key <Text dimColor>(optional)</Text></Text>
+        <Text dimColor>Leave empty if no auth is required, or enter your API key:</Text>
+        <TextInput
+          value={apiKey}
+          onChange={setApiKey}
+          cursorOffset={apiKeyCursor}
+          onChangeCursorOffset={setApiKeyCursor}
+          onSubmit={(value: string) => {
+            setApiKey(value.trim())
+            fetchModels(baseUrl, value.trim())
+          }}
+          placeholder="sk-... (or leave empty)"
+          focus={true}
+          showCursor={true}
+        />
+        <Text dimColor>Press Enter to continue · Esc to go back</Text>
+      </Box>
+    )
+  }
+
+  if (step === 'loading') {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Spinner label="Fetching available models..." />
+      </Box>
+    )
+  }
+
+  if (step === 'model-select') {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold>Select Model</Text>
+        <Text dimColor>Choose the model to use with this provider:</Text>
+        <Select
+          options={models.map(m => ({ label: m.id, value: m.id }))}
+          onChange={(modelId: string) => saveAndDone(modelId)}
+          onCancel={() => setStep('api-key')}
+        />
+      </Box>
+    )
+  }
+
+  // step === 'model' — fallback manual entry
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Text bold>Model ID</Text>
+      {fetchError ? (
+        <Box flexDirection="column">
+          <Text color="yellow">Could not auto-detect models:</Text>
+          <Text color="yellow">{fetchError}</Text>
+        </Box>
+      ) : (
+        <Text dimColor>No models found at this endpoint.</Text>
+      )}
+      <Text dimColor>Enter the model ID to use:</Text>
+      <TextInput
+        value={manualModel}
+        onChange={setManualModel}
+        cursorOffset={modelCursor}
+        onChangeCursorOffset={setModelCursor}
+        onSubmit={(value: string) => {
+          const trimmed = value.trim()
+          saveAndDone(trimmed || undefined)
+        }}
+        placeholder="gpt-4o, llama3, etc."
+        focus={true}
+        showCursor={true}
+      />
+      <Text dimColor>Press Enter to confirm · Esc to go back</Text>
+    </Box>
+  )
+}
+
+/**
  * API key input form for OpenRouter provider.
  * Flow: base-url → api-key → loading (fetch models) → model-select.
  */
@@ -411,6 +647,7 @@ function OpenRouterApiKeySetup({
   onChangeAPIKey: () => void
 }): React.ReactNode {
   const cfg = getGlobalConfig()
+  const setAppState = useSetAppState()
   const [step, setStep] = React.useState<'api-key' | 'loading' | 'model-select'>('api-key')
   const [apiKey, setApiKey] = React.useState(cfg.openrouterApiKey ?? '')
   const [models, setModels] = React.useState<Array<{ id: string }>>([])
@@ -433,6 +670,9 @@ function OpenRouterApiKeySetup({
       delete process.env[envVar]
     }
     process.env.CLAUDE_CODE_USE_OPENROUTER = '1'
+    setMainLoopModelOverride(modelId || undefined)
+    updateSettingsForSource('userSettings', { model: modelId || undefined })
+    setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
     onChangeAPIKey()
     onDone(`Switched provider to ${chalk.bold(getProviderLabel('openrouter'))} using API key`)
   }
@@ -520,7 +760,8 @@ function OpenAIOptionsMenu({
   isCurrent: boolean
   hasExisting: boolean
 }): React.ReactNode {
-  const [subPhase, setSubPhase] = React.useState<'menu' | 'oauth' | 'apikey'>('menu')
+  const [subPhase, setSubPhase] = React.useState<'menu' | 'oauth' | 'apikey' | 'openai-compat'>('menu')
+  const setAppState = useSetAppState()
 
   const handleSelect = React.useCallback(
     (value: string) => {
@@ -532,6 +773,7 @@ function OpenAIOptionsMenu({
           )
         } else {
           applyProvider('openai')
+          setAppState(prev => ({ ...prev, mainLoopModel: null }))
           onDone(
             `Switched provider to ${chalk.bold(getProviderLabel('openai'))}`,
           )
@@ -540,6 +782,8 @@ function OpenAIOptionsMenu({
         setSubPhase('oauth')
       } else if (value === 'apikey') {
         setSubPhase('apikey')
+      } else if (value === 'openai-compat') {
+        setSubPhase('openai-compat')
       }
     },
     [isCurrent, onDone],
@@ -559,6 +803,16 @@ function OpenAIOptionsMenu({
   if (subPhase === 'apikey') {
     return (
       <OpenAIApiKeySetup
+        onDone={onDone}
+        onBack={() => setSubPhase('menu')}
+        onChangeAPIKey={context.onChangeAPIKey}
+      />
+    )
+  }
+
+  if (subPhase === 'openai-compat') {
+    return (
+      <OpenAICompatSetup
         onDone={onDone}
         onBack={() => setSubPhase('menu')}
         onChangeAPIKey={context.onChangeAPIKey}
@@ -591,6 +845,11 @@ function OpenAIOptionsMenu({
       label: 'Use API key',
       description: 'Enter an OpenAI API key and optional base URL',
     },
+    {
+      value: 'openai-compat',
+      label: 'OpenAI Compatible API',
+      description: 'Custom endpoint with OpenAI API format (Ollama, LM Studio, etc.)',
+    },
   )
 
   return (
@@ -622,6 +881,7 @@ function AnthropicCompatApiKeySetup({
   onChangeAPIKey: () => void
 }): React.ReactNode {
   const cfg = getGlobalConfig()
+  const setAppState = useSetAppState()
   const [step, setStep] = React.useState<'base-url' | 'api-key' | 'loading' | 'model-select' | 'model'>('base-url')
   const [baseUrl, setBaseUrl] = React.useState(cfg.anthropicCompatBaseUrl ?? '')
   const [apiKey, setApiKey] = React.useState(cfg.anthropicCompatApiKey ?? '')
@@ -653,6 +913,9 @@ function AnthropicCompatApiKeySetup({
       delete process.env[envVar]
     }
     process.env.CLAUDE_CODE_USE_ANTHROPIC_COMPAT = '1'
+    setMainLoopModelOverride(modelId || undefined)
+    updateSettingsForSource('userSettings', { model: modelId || undefined })
+    setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
     onChangeAPIKey()
     onDone(`Switched provider to ${chalk.bold(getProviderLabel('anthropicCompat'))} at ${chalk.dim(baseUrl)}`)
   }
@@ -848,6 +1111,7 @@ function ProviderPickerWrapper({
   context: LocalJSXCommandContext
 }): React.ReactNode {
   const currentProvider = getAPIProvider()
+  const setAppState = useSetAppState()
   const [state, setState] = React.useState<PickerState>({ phase: 'pick' })
 
   const handleCancel = React.useCallback(() => {
@@ -908,6 +1172,7 @@ function ProviderPickerWrapper({
 
       // Credentials exist, just switch
       applyProvider(provider)
+      setAppState(prev => ({ ...prev, mainLoopModel: null }))
       onDone(
         `Switched provider to ${chalk.bold(getProviderLabel(provider))}`,
       )
@@ -1021,6 +1286,7 @@ function SetProviderAndClose({
   ) => void
 }): React.ReactNode {
   const currentProvider = getAPIProvider()
+  const setAppState = useSetAppState()
 
   React.useEffect(() => {
     const normalized = args.toLowerCase().trim()
@@ -1051,6 +1317,7 @@ function SetProviderAndClose({
     }
 
     applyProvider(match.value)
+    setAppState(prev => ({ ...prev, mainLoopModel: null }))
     onDone(
       `Switched provider to ${chalk.bold(getProviderLabel(match.value))}`,
     )

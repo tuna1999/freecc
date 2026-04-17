@@ -439,24 +439,37 @@ export function useTextInput({
       return
     }
 
-    // Fix Issue #1853: Filter DEL characters that interfere with backspace in SSH/tmux
-    // In SSH/tmux environments, backspace generates both key events and raw DEL chars.
-    // Also handles IME input (e.g., Unikey) that sends DEL + composed char in one chunk
-    // (e.g., "\x7fô" to replace base "o" with "ô") — must process both DELs and text.
-    if (!key.backspace && !key.delete && input.includes('\x7f')) {
+    // Handle IME composition (e.g., Vietnamese Unikey, Chinese Pinyin).
+    // IMEs send DEL (0x7f) or BS (0x08) + composed char in one stdin chunk
+    // (e.g., "\x7fô" to replace base "o" with "ô", or "\x08â" to replace "a" with "â").
+    // parseKeypress doesn't match multi-char strings, so the combined input falls through
+    // to the default handler which would insert the raw bytes as literal text.
+    // Process atomically: backspace then insert, in one cursor operation.
+    if (
+      !key.backspace &&
+      !key.delete &&
+      !key.ctrl &&
+      !key.meta &&
+      input.length > 1 &&
+      (input.includes('\x7f') || input.includes('\x08'))
+    ) {
       let currentCursor = cursor
       let idx = 0
 
       while (idx < input.length) {
-        if (input[idx] === '\x7f') {
-          // Apply DEL as backspace (prefer token delete, fall back to char)
+        const ch = input[idx]
+        if (ch === '\x7f' || ch === '\x08') {
           currentCursor =
             currentCursor.deleteTokenBefore() ?? currentCursor.backspace()
           idx++
         } else {
-          // Collect non-DEL text and insert it
           let start = idx
-          while (idx < input.length && input[idx] !== '\x7f') idx++
+          while (
+            idx < input.length &&
+            input[idx] !== '\x7f' &&
+            input[idx] !== '\x08'
+          )
+            idx++
           const text = stripAnsi(input.slice(start, idx))
             // eslint-disable-next-line custom-rules/no-lookbehind-regex
             .replace(/(?<=[^\\\r\n])\r$/, '')
@@ -467,12 +480,33 @@ export function useTextInput({
         }
       }
 
-      // Update state once with the final result
       if (!cursor.equals(currentCursor)) {
         if (cursor.text !== currentCursor.text) {
           onChange(currentCursor.text)
         }
         setOffset(currentCursor.offset)
+      }
+      resetKillAccumulation()
+      resetYankState()
+      return
+    }
+
+    // Handle lone DEL/BS that arrived as the only character (SSH/tmux echo).
+    // When parseKeypress identifies them as backspace, the normal mapKey path
+    // handles it. But if they arrive embedded in a larger input without being
+    // split by the tokenizer, we catch them here.
+    if (
+      !key.backspace &&
+      !key.delete &&
+      (filteredInput === '\x7f' || filteredInput === '\x08')
+    ) {
+      const nextCursor =
+        cursor.deleteTokenBefore() ?? cursor.backspace()
+      if (!cursor.equals(nextCursor)) {
+        if (cursor.text !== nextCursor.text) {
+          onChange(nextCursor.text)
+        }
+        setOffset(nextCursor.offset)
       }
       resetKillAccumulation()
       resetYankState()
