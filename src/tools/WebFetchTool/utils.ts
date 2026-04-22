@@ -454,7 +454,13 @@ export async function getURLMarkdownContent(
   let markdownContent: string
   let contentBytes: number
   if (contentType.includes('text/html')) {
-    markdownContent = (await getTurndownService()).turndown(htmlContent)
+    try {
+      markdownContent = (await getTurndownService()).turndown(htmlContent)
+    } catch {
+      // Turndown can crash on malformed HTML (e.g. nodes with undefined nodeName).
+      // Fall back to raw HTML which the secondary model can still process.
+      markdownContent = htmlContent
+    }
     contentBytes = Buffer.byteLength(markdownContent)
   } else {
     // It's not HTML - just use it raw. The decoded string's UTF-8 byte
