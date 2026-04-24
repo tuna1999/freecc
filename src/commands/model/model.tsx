@@ -280,7 +280,7 @@ function _temp7(s) {
 }
 function ModelPickerWithRefetch({ onDone }: { onDone: Parameters<LocalJSXCommandCall>[0] }): React.ReactNode {
   const provider = getAPIProvider()
-  const needsFetch = provider === 'openrouter' || provider === 'anthropicCompat'
+  const needsFetch = provider === 'openrouter' || provider === 'anthropicCompat' || provider === 'openai'
   const [fetching, setFetching] = React.useState(needsFetch)
 
   React.useEffect(() => {
@@ -288,47 +288,75 @@ function ModelPickerWithRefetch({ onDone }: { onDone: Parameters<LocalJSXCommand
 
     const cfg = getGlobalConfig()
 
+    function parseModelsList(data: unknown): string[] {
+      let list: Array<{ id: string }> = []
+      const d = data as Record<string, unknown>
+      if (Array.isArray(d.data)) {
+        list = (d.data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+          id: String(m.id ?? m.name ?? ''),
+        })).filter(m => m.id)
+      }
+      if (list.length === 0 && Array.isArray(d.models)) {
+        list = (d.models as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+          id: String(m.id ?? m.name ?? ''),
+        })).filter(m => m.id)
+      }
+      if (list.length === 0 && Array.isArray(data)) {
+        list = (data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
+          id: String(m.id ?? m.name ?? ''),
+        })).filter(m => m.id)
+      }
+      return list.map(m => m.id).sort((a, b) => a.localeCompare(b))
+    }
+
+    function tryFetch(paths: string[], headers: Record<string, string>, configKey: 'openrouterAvailableModels' | 'anthropicCompatAvailableModels' | 'openaiAvailableModels', idx = 0) {
+      if (idx >= paths.length) {
+        setFetching(false)
+        return
+      }
+      globalThis.fetch(paths[idx], { headers })
+        .then(r => {
+          if (!r.ok) { tryFetch(paths, headers, configKey, idx + 1); return null }
+          return r.json()
+        })
+        .then((data: unknown | null) => {
+          if (data === null) return
+          const sorted = parseModelsList(data)
+          if (sorted.length > 0) {
+            saveGlobalConfig(current => ({ ...current, [configKey]: sorted }))
+          } else {
+            tryFetch(paths, headers, configKey, idx + 1)
+          }
+          setFetching(false)
+        })
+        .catch(() => {
+          tryFetch(paths, headers, configKey, idx + 1)
+        })
+    }
+
     if (provider === 'openrouter') {
       if (!cfg.openrouterApiKey) { setFetching(false); return }
-      const url = `${OPENROUTER_DEFAULT_BASE_URL}/models`
-      const headers = { Authorization: `Bearer ${cfg.openrouterApiKey}` }
-
-      globalThis.fetch(url, { headers })
-        .then(r => r.json())
-        .then((data: unknown) => {
-          const d = data as { data?: unknown }
-          const list: Array<{ id: string }> = Array.isArray(d.data)
-            ? (d as { data: Array<{ id: string }> }).data
-            : []
-          if (list.length > 0) {
-            const sorted = list.map(m => m.id).sort((a, b) => a.localeCompare(b))
-            saveGlobalConfig(current => ({ ...current, openrouterAvailableModels: sorted }))
-          }
-        })
-        .catch(() => {})
-        .finally(() => setFetching(false))
+      tryFetch(
+        [`${OPENROUTER_DEFAULT_BASE_URL}/models`],
+        { Authorization: `Bearer ${cfg.openrouterApiKey}` },
+        'openrouterAvailableModels',
+      )
     } else if (provider === 'anthropicCompat') {
       if (!cfg.anthropicCompatBaseUrl || !cfg.anthropicCompatApiKey) { setFetching(false); return }
       const base = cfg.anthropicCompatBaseUrl.replace(/\/+$/, '')
-      const headers = {
-        'x-api-key': cfg.anthropicCompatApiKey,
-        Authorization: `Bearer ${cfg.anthropicCompatApiKey}`,
-      }
-
-      globalThis.fetch(`${base}/models`, { headers })
-        .then(r => r.json())
-        .then((data: unknown) => {
-          const d = data as { data?: unknown }
-          const list: Array<{ id: string }> = Array.isArray(d.data)
-            ? (d as { data: Array<{ id: string }> }).data
-            : []
-          if (list.length > 0) {
-            const sorted = list.map(m => m.id).sort((a, b) => a.localeCompare(b))
-            saveGlobalConfig(current => ({ ...current, anthropicCompatAvailableModels: sorted }))
-          }
-        })
-        .catch(() => {})
-        .finally(() => setFetching(false))
+      tryFetch(
+        [`${base}/models`, `${base}/v1/models`],
+        { 'x-api-key': cfg.anthropicCompatApiKey, Authorization: `Bearer ${cfg.anthropicCompatApiKey}` },
+        'anthropicCompatAvailableModels',
+      )
+    } else if (provider === 'openai') {
+      if (!cfg.openaiApiKey) { setFetching(false); return }
+      const base = (cfg.openaiBaseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
+      tryFetch(
+        [`${base}/models`],
+        { Authorization: `Bearer ${cfg.openaiApiKey}` },
+        'openaiAvailableModels',
+      )
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
