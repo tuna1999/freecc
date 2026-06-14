@@ -18,6 +18,7 @@ import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { OPENROUTER_DEFAULT_BASE_URL } from '../../services/api/chat-completions-adapter.js'
 import { getAPIProvider, type APIProvider } from '../../utils/model/providers.js'
 import { fetchModelsFromBaseUrl } from './fetchModels.js'
+import { applyEnvVarPlan, planProviderSwitch } from './planProviderSwitch.js'
 import { useProviderSetupWizard } from './useProviderSetupWizard.js'
 import { setMainLoopModelOverride } from '../../bootstrap/state.js'
 import { useSetAppState } from '../../state/AppState.js'
@@ -111,8 +112,11 @@ function getProviderLabel(provider: APIProvider): string {
  *
  * The legacy `applyProvider(provider)` is now a thin alias for shape #1.
  *
- * @internal — exported for unit tests in src/commands/provider/provider.test.ts
- * @see P6.2 in the refactor plan
+ * Implementation note: the decision tree (which env vars to clear, which
+ * model to set, which config to merge) is computed by the pure
+ * `planProviderSwitch` helper. This function just applies the plan and
+ * fires the optional side effects. The plan is unit-testable in isolation
+ * — see src/commands/provider/planProviderSwitch.test.ts.
  */
 export function applyProviderSwitch(params: {
   provider: APIProvider
@@ -125,7 +129,7 @@ export function applyProviderSwitch(params: {
 }): void {
   const {
     provider,
-    configFields = {},
+    configFields,
     modelId,
     message,
     setAppState,
@@ -133,24 +137,24 @@ export function applyProviderSwitch(params: {
     onDone,
   } = params
 
-  // 1. Persist provider choice + any per-provider config to ~/.freecc.json
-  saveGlobalConfig(current => ({
-    ...current,
-    ...configFields,
-    apiProvider: provider,
-  }))
+  // 1. Compute the desired end state (pure function — see planProviderSwitch.ts)
+  const plan = planProviderSwitch({
+    provider,
+    configFields,
+    modelId,
+    currentConfig: getGlobalConfig() as Record<string, unknown>,
+    currentEnv: process.env,
+    options: PROVIDER_OPTIONS,
+  })
 
-  // 2. Sync env vars (clear all, set the active one)
-  clearAllProviderEnvVars()
-  setProviderEnvVar(provider)
+  // 2. Apply the plan
+  saveGlobalConfig(current => ({ ...current, ...plan.config }))
+  applyEnvVarPlan(process.env, plan.envVars)
+  setMainLoopModelOverride(plan.modelOverride)
+  updateSettingsForSource('userSettings', { model: plan.modelOverride })
+  setAppState(prev => ({ ...prev, mainLoopModel: plan.nextMainLoopModel }))
 
-  // 3. Sync model across all three layers: bootstrap override, userSettings,
-  // and in-memory AppState. modelId undefined → cleared in all three.
-  setMainLoopModelOverride(modelId || undefined)
-  updateSettingsForSource('userSettings', { model: modelId || undefined })
-  setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
-
-  // 4. Optional side effects (used by setup flows)
+  // 3. Optional side effects (used by setup flows)
   onChangeAPIKey?.()
   onDone?.(message)
 }

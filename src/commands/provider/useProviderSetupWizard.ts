@@ -100,7 +100,7 @@ export function useProviderSetupWizard(
   const [modelCursor, setModelCursor] = React.useState(initialManualModel.length)
 
   const onEscape = React.useCallback(() => {
-    setStep(prev => {
+    setStep((prev: SetupStep) => {
       // 'loading' is not a navigable step — caller usually disables input
       // in this state. If somehow escape fires, stay put.
       if (prev === 'loading') return prev
