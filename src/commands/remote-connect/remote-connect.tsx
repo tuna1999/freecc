@@ -39,8 +39,8 @@ function RemoteConnectUI({
   initialKey?: string
 }): React.ReactNode {
   const cfg = getGlobalConfig()
-  const savedServer = initialServer || (cfg as any).remoteServerUrl || ''
-  const savedKey = initialKey || (cfg as any).remoteClientKey || ''
+  const savedServer = initialServer || cfg.remoteServerUrl || ''
+  const savedKey = initialKey || cfg.remoteClientKey || ''
 
   const [phase, setPhase] = React.useState<Phase>(() => {
     if (getRemoteClient()?.isConnected()) return { step: 'menu' }

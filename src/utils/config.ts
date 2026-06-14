@@ -271,6 +271,19 @@ export type GlobalConfig = {
   anthropicCompatBaseUrl?: string
   anthropicCompatModel?: string
   anthropicCompatAvailableModels?: string[]
+
+  /**
+   * Self-hosted remote relay server URL (used by /remote-connect).
+   * Persisted so the user does not have to re-enter it on subsequent runs.
+   * @see src/commands/remote-connect/remote-connect.tsx
+   */
+  remoteServerUrl?: string
+  /**
+   * Self-hosted remote relay client key (the ck_* token issued by the server
+   * after pairing approval). Persisted alongside remoteServerUrl.
+   */
+  remoteClientKey?: string
+
   fallbackModel?: string // Model to fall back to when primary model is overloaded
   iterm2KeyBindingInstalled?: boolean // Legacy - keeping for backward compatibility
   editorMode?: EditorMode
