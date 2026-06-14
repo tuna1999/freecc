@@ -5,17 +5,17 @@
 
 import type { RemoteClient } from './client.js'
 import { getBuiltinPlugins } from '../plugins/builtinPlugins.js'
+import type { RelayMessage, RelayMessageRef } from './types.js'
 
 type RemoteInputListener = (input: string) => void
 type RemoteInterruptListener = () => void
-type MessagesRef = { current: any[] }
 type PermissionHandler = { onAllow: () => void; onReject: () => void }
 type PromptHandler = { onSelect: (key: string) => void; onAbort: () => void }
 
 let activeClient: RemoteClient | null = null
 let inputListener: RemoteInputListener | null = null
 let interruptListener: RemoteInterruptListener | null = null
-let registeredMessagesRef: MessagesRef | null = null
+let registeredMessagesRef: RelayMessageRef | null = null
 let currentPermissionHandler: PermissionHandler | null = null
 let currentPromptHandler: PromptHandler | null = null
 let pollingInterval: ReturnType<typeof setInterval> | null = null
@@ -135,7 +135,7 @@ export function dispatchPromptResponse(selected: string): void {
 /**
  * Called from REPL on every render to register the messages ref.
  */
-export function forwardMessagesToRemote(messagesRef: MessagesRef): void {
+export function forwardMessagesToRemote(messagesRef: RelayMessageRef): void {
   registeredMessagesRef = messagesRef
 }
 
@@ -202,7 +202,7 @@ function startPolling(): void {
   }, 80)
 }
 
-function sendMessage(msg: any): void {
+function sendMessage(msg: RelayMessage): void {
   if (!activeClient || !msg) return
 
   // Skip internal/meta messages
@@ -241,7 +241,7 @@ function sendMessage(msg: any): void {
           })
         } else if (block && block.type === 'tool_use') {
           if (block.name === 'ToolSearch') continue
-          const input = block.input || {}
+          const input = (block.input as Record<string, unknown>) || {}
           const { label, args } = formatToolDisplay(block.name, input)
           activeClient.send({
             type: 'tool_use',
@@ -274,12 +274,15 @@ function sendMessage(msg: any): void {
   }
 }
 
-function formatToolDisplay(name: string, input: any): { label: string; args: string } {
+function formatToolDisplay(
+  name: string,
+  input: Record<string, unknown>,
+): { label: string; args: string } {
   if (!name) return { label: 'Tool', args: '' }
 
-  function fmtArgs(obj: any, keys?: string[]): string {
+  function fmtArgs(obj: Record<string, unknown>, keys?: string[]): string {
     const entries = keys
-      ? keys.filter(k => obj[k] !== undefined).map(k => [k, obj[k]])
+      ? keys.filter(k => obj[k] !== undefined).map(k => [k, obj[k]] as const)
       : Object.entries(obj).filter(([, v]) => v !== undefined)
     if (entries.length === 0) return ''
     const parts = entries.map(([k, v]) => {
@@ -291,7 +294,10 @@ function formatToolDisplay(name: string, input: any): { label: string; args: str
   }
 
   switch (name) {
-    case 'Bash': return { label: 'Bash', args: input.command ? `(${input.command.slice(0, 80)}${input.command.length > 80 ? '...' : ''})` : '' }
+    case 'Bash': {
+      const cmd = typeof input.command === 'string' ? input.command : ''
+      return { label: 'Bash', args: cmd ? `(${cmd.slice(0, 80)}${cmd.length > 80 ? '...' : ''})` : '' }
+    }
     case 'Read': return { label: 'Read', args: fmtArgs(input, ['file_path']) }
     case 'Write': return { label: 'Write', args: fmtArgs(input, ['file_path']) }
     case 'Edit': return { label: 'Edit', args: fmtArgs(input, ['file_path']) }
@@ -312,9 +318,11 @@ function formatToolDisplay(name: string, input: any): { label: string; args: str
   }
 }
 
-function getMessageText(msg: any): string {
+function getMessageText(msg: RelayMessage): string {
   if (!msg) return ''
-  const content = msg.message?.content ?? msg.content
+  // Per RelayMessage contract, content lives at message.content (Anthropic-style)
+  // — do NOT fall back to msg.content, which is a different field on other shapes.
+  const content = msg.message?.content
   if (!content) return ''
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
