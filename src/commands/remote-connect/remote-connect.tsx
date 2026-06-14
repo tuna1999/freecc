@@ -191,6 +191,10 @@ function RemoteConnectUI({
           void doConnect(phase.serverUrl, key)
         }}
         onRejected={() => setPhase({ step: 'error', message: 'Pairing request was rejected by the server admin.' })}
+        onExpired={() => setPhase({
+          step: 'error',
+          message: 'Pairing request expired after 10 minutes. Re-run /remote-connect to send a new request.',
+        })}
         onCancel={() => onDone('Cancelled', { display: 'system' })}
       />
     )
@@ -271,27 +275,41 @@ function RemoteConnectUI({
 
 /**
  * Polls the server for pairing approval.
+ * Times out after 10 minutes — long enough for a human admin to see and
+ * respond, short enough that the user is not stuck waiting forever if the
+ * admin never acts.
  */
+const PAIRING_TIMEOUT_MS = 10 * 60 * 1000
+
 function PairingWait({
   serverUrl,
   pairingId,
   onApproved,
   onRejected,
+  onExpired,
   onCancel,
 }: {
   serverUrl: string
   pairingId: string
   onApproved: (clientKey: string) => void
   onRejected: () => void
+  onExpired: () => void
   onCancel: () => void
 }): React.ReactNode {
   const [dots, setDots] = React.useState('')
 
   React.useEffect(() => {
     let cancelled = false
+    const startedAt = Date.now()
 
     const poll = async () => {
       while (!cancelled) {
+        // Hard deadline — surface a distinct "expired" outcome so the
+        // caller can render a more actionable message than a generic reject.
+        if (Date.now() - startedAt > PAIRING_TIMEOUT_MS) {
+          onExpired()
+          return
+        }
         try {
           const res = await fetch(`${serverUrl}/api/pair/${pairingId}`)
           if (!res.ok) { onRejected(); return }
@@ -321,7 +339,7 @@ function PairingWait({
       cancelled = true
       clearInterval(dotTimer)
     }
-  }, [serverUrl, pairingId, onApproved, onRejected])
+  }, [serverUrl, pairingId, onApproved, onRejected, onExpired])
 
   return (
     <Box flexDirection="column" gap={1}>
