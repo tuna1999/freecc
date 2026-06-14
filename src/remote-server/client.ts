@@ -7,6 +7,7 @@
 
 import WebSocket from 'ws'
 import type { RemoteMessage, RemoteServerConfig, SessionCreateResponse } from './types.js'
+import { RemoteMessageSchema } from './schemas.js'
 
 export type RemoteClientEvents = {
   /** Remote web user sent a message */
@@ -224,9 +225,23 @@ export class RemoteClient {
 
     this.ws.on('message', (data) => {
       try {
-        const msg = JSON.parse(data.toString()) as RemoteMessage
-        this._handleMessage(msg)
-      } catch {}
+        const raw = JSON.parse(data.toString())
+        // Validate against the schema before dispatching into the local REPL
+        // pipeline. A malformed or hostile message is dropped silently rather
+        // than cast through 'as RemoteMessage' and forwarded to the input
+        // listener (which would feed it back to Claude as if the user typed it).
+        const parsed = RemoteMessageSchema.safeParse(raw)
+        if (!parsed.success) {
+          this.events.onError?.(new Error(
+            `Invalid WebSocket message: ${parsed.error.issues[0]?.message ?? 'unknown'}`,
+          ))
+          return
+        }
+        this._handleMessage(parsed.data as RemoteMessage)
+      } catch {
+        // Malformed JSON — ignore. The relay protocol is closed, so a stray
+        // non-JSON frame is almost certainly a bug somewhere upstream.
+      }
     })
 
     this.ws.on('close', () => {
