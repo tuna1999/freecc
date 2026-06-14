@@ -17,6 +17,7 @@ import { getCodexOAuthTokens, hasAnthropicApiKeyAuth } from '../../utils/auth.js
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { OPENROUTER_DEFAULT_BASE_URL } from '../../services/api/chat-completions-adapter.js'
 import { getAPIProvider, type APIProvider } from '../../utils/model/providers.js'
+import { fetchModelsFromBaseUrl } from './fetchModels.js'
 import { setMainLoopModelOverride } from '../../bootstrap/state.js'
 import { useSetAppState } from '../../state/AppState.js'
 import { updateSettingsForSource } from '../../utils/settings/settings.js'
@@ -361,26 +362,21 @@ function OpenAIApiKeySetup({
   }
 
   function fetchModels() {
-    const base = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
+    const base = baseUrl || 'https://api.openai.com/v1'
     setStep('loading')
-    globalThis.fetch(`${base}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    })
-      .then(r => r.json())
-      .then((data: unknown) => {
-        const list: Array<{ id: string }> = Array.isArray((data as { data?: unknown }).data)
-          ? (data as { data: Array<{ id: string }> }).data
-          : []
-        if (list.length > 0) {
-          setModels(list.sort((a, b) => a.id.localeCompare(b.id)))
-          setStep('model-select')
-        } else {
-          saveAndDone()
-        }
-      })
-      .catch(() => {
+    void fetchModelsFromBaseUrl({
+      baseUrl: base,
+      apiKey,
+      paths: ['/models'],
+      authStyle: 'bearer',
+      onSuccess: (sorted) => {
+        setModels(sorted.map(id => ({ id })))
+        setStep('model-select')
+      },
+      onError: () => {
         saveAndDone()
-      })
+      },
+    })
   }
 
   if (step === 'api-key') {
@@ -507,70 +503,25 @@ function OpenAICompatSetup({
   }
 
   function fetchModels(url: string, key: string) {
-    const base = url.replace(/\/+$/, '')
     setStep('loading')
-    const paths = ['/v1/models', '/models']
-    let lastError = ''
-
-    function tryNext(idx: number) {
-      if (idx >= paths.length) {
+    void fetchModelsFromBaseUrl({
+      baseUrl: url,
+      apiKey: key,
+      paths: ['/v1/models', '/models'],
+      authStyle: 'bearer',
+      onSuccess: (sorted) => {
+        setModels(sorted.map(id => ({ id })))
+        saveGlobalConfig(current => ({
+          ...current,
+          openaiAvailableModels: sorted,
+        }))
+        setStep('model-select')
+      },
+      onError: (lastError) => {
         setFetchError(lastError)
         setStep('model')
-        return
-      }
-      const fetchUrl = `${base}${paths[idx]}`
-      const headers: Record<string, string> = {}
-      if (key) {
-        headers.Authorization = `Bearer ${key}`
-      }
-      globalThis.fetch(fetchUrl, { headers })
-        .then(r => {
-          if (!r.ok) {
-            lastError = `${paths[idx]} → HTTP ${r.status}`
-            tryNext(idx + 1)
-            return null
-          }
-          return r.json()
-        })
-        .then((data: unknown | null) => {
-          if (data === null) return
-          let list: Array<{ id: string }> = []
-          const d = data as Record<string, unknown>
-          if (Array.isArray(d.data)) {
-            list = (d.data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          if (list.length === 0 && Array.isArray(d.models)) {
-            list = (d.models as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          if (list.length === 0 && Array.isArray(data)) {
-            list = (data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          if (list.length > 0) {
-            const sorted = list.sort((a, b) => a.id.localeCompare(b.id))
-            setModels(sorted)
-            saveGlobalConfig(current => ({
-              ...current,
-              openaiAvailableModels: sorted.map(m => m.id),
-            }))
-            setStep('model-select')
-          } else {
-            lastError = `${paths[idx]} → no models in response`
-            tryNext(idx + 1)
-          }
-        })
-        .catch((err: Error) => {
-          lastError = `${paths[idx]} → ${err.message}`
-          tryNext(idx + 1)
-        })
-    }
-
-    tryNext(0)
+      },
+    })
   }
 
   if (step === 'base-url') {
@@ -717,24 +668,19 @@ function OpenRouterApiKeySetup({
 
   function fetchModels(key: string) {
     setStep('loading')
-    globalThis.fetch(`${OPENROUTER_DEFAULT_BASE_URL}/models`, {
-      headers: { Authorization: `Bearer ${key}` },
-    })
-      .then(r => r.json())
-      .then((data: unknown) => {
-        const list: Array<{ id: string }> = Array.isArray((data as { data?: unknown }).data)
-          ? (data as { data: Array<{ id: string }> }).data
-          : []
-        if (list.length > 0) {
-          setModels(list.sort((a, b) => a.id.localeCompare(b.id)))
-          setStep('model-select')
-        } else {
-          saveAndDone()
-        }
-      })
-      .catch(() => {
+    void fetchModelsFromBaseUrl({
+      baseUrl: OPENROUTER_DEFAULT_BASE_URL,
+      apiKey: key,
+      paths: ['/models'],
+      authStyle: 'bearer',
+      onSuccess: (sorted) => {
+        setModels(sorted.map(id => ({ id })))
+        setStep('model-select')
+      },
+      onError: () => {
         saveAndDone()
-      })
+      },
+    })
   }
 
   if (step === 'api-key') {
@@ -955,75 +901,25 @@ function AnthropicCompatApiKeySetup({
   }
 
   function fetchModels(url: string, key: string) {
-    const base = url.replace(/\/+$/, '')
     setStep('loading')
-    // Try multiple paths: /models, /v1/models
-    const paths = ['/models', '/v1/models']
-    let lastError = ''
-
-    function tryNext(idx: number) {
-      if (idx >= paths.length) {
+    void fetchModelsFromBaseUrl({
+      baseUrl: url,
+      apiKey: key,
+      paths: ['/models', '/v1/models'],
+      authStyle: 'x-api-key',
+      onSuccess: (sorted) => {
+        setModels(sorted.map(id => ({ id })))
+        saveGlobalConfig(current => ({
+          ...current,
+          anthropicCompatAvailableModels: sorted,
+        }))
+        setStep('model-select')
+      },
+      onError: (lastError) => {
         setFetchError(lastError)
         setStep('model')
-        return
-      }
-      const fetchUrl = `${base}${paths[idx]}`
-      globalThis.fetch(fetchUrl, {
-        headers: {
-          'x-api-key': key,
-          Authorization: `Bearer ${key}`,
-        },
-      })
-        .then(r => {
-          if (!r.ok) {
-            lastError = `${paths[idx]} → HTTP ${r.status}`
-            tryNext(idx + 1)
-            return null
-          }
-          return r.json()
-        })
-        .then((data: unknown | null) => {
-          if (data === null) return
-          // Handle { data: [{ id: ... }] } (OpenAI/Anthropic style)
-          let list: Array<{ id: string }> = []
-          const d = data as Record<string, unknown>
-          if (Array.isArray(d.data)) {
-            list = (d.data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          // Handle { models: [{ name: ... }] } (Ollama-style)
-          if (list.length === 0 && Array.isArray(d.models)) {
-            list = (d.models as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          // Handle direct array [{ id: ... }]
-          if (list.length === 0 && Array.isArray(data)) {
-            list = (data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          if (list.length > 0) {
-            const sorted = list.sort((a, b) => a.id.localeCompare(b.id))
-            setModels(sorted)
-            saveGlobalConfig(current => ({
-              ...current,
-              anthropicCompatAvailableModels: sorted.map(m => m.id),
-            }))
-            setStep('model-select')
-          } else {
-            lastError = `${paths[idx]} → no models in response`
-            tryNext(idx + 1)
-          }
-        })
-        .catch((err: Error) => {
-          lastError = `${paths[idx]} → ${err.message}`
-          tryNext(idx + 1)
-        })
-    }
-
-    tryNext(0)
+      },
+    })
   }
 
   if (step === 'base-url') {
