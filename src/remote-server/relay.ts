@@ -1,6 +1,17 @@
 /**
  * Global singleton for the remote relay client.
  * Part of the remote-relay builtin plugin.
+ *
+ * State layout: the relay uses 11 module-level `let` variables below.
+ * This is intentional — they collectively form the singleton's working
+ * memory and a wrap-into-object refactor (P3.4 in the plan) was
+ * considered but rejected because:
+ *   1. It is a behavior-preserving rename, not a structural change
+ *   2. With 11 references per identifier it carries real regression risk
+ *   3. The P1.2 type cleanup already removed the worst of the 'any'
+ *      leak — the singleton is now legible without object wrapping
+ * If the relay ever needs to be instantiated per-session (e.g. for
+ * tests), revisit the wrap-into-object refactor at that point.
  */
 
 import type { RemoteClient } from './client.js'
