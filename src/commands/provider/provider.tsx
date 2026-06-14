@@ -18,6 +18,7 @@ import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { OPENROUTER_DEFAULT_BASE_URL } from '../../services/api/chat-completions-adapter.js'
 import { getAPIProvider, type APIProvider } from '../../utils/model/providers.js'
 import { fetchModelsFromBaseUrl } from './fetchModels.js'
+import { ModelSearchPicker } from './ModelSearchPicker.js'
 import { applyEnvVarPlan, planProviderSwitch } from './planProviderSwitch.js'
 import { useProviderSetupWizard } from './useProviderSetupWizard.js'
 import { setMainLoopModelOverride } from '../../bootstrap/state.js'
@@ -449,14 +450,11 @@ function OpenAIApiKeySetup({
 
   // model-select step
   return (
-    <Box flexDirection="column" gap={1}>
-      <Text bold>Select Model</Text>
-      <Text dimColor>Choose the model to use with this API:</Text>
-      <Select
-        options={models.map(m => ({ label: m.id, value: m.id }))}
-        onChange={(modelId: string) => saveAndDone(modelId)}
-      />
-    </Box>
+    <ModelSearchPicker
+      models={models}
+      onSelect={(modelId: string) => saveAndDone(modelId)}
+      onCancel={() => setStep('base-url')}
+    />
   )
 }
 
@@ -584,15 +582,11 @@ function OpenAICompatSetup({
 
   if (step === 'model-select') {
     return (
-      <Box flexDirection="column" gap={1}>
-        <Text bold>Select Model</Text>
-        <Text dimColor>Choose the model to use with this provider:</Text>
-        <Select
-          options={models.map(m => ({ label: m.id, value: m.id }))}
-          onChange={(modelId: string) => saveAndDone(modelId)}
-          onCancel={() => setStep('api-key')}
-        />
-      </Box>
+      <ModelSearchPicker
+        models={models}
+        onSelect={(modelId: string) => saveAndDone(modelId)}
+        onCancel={() => setStep('api-key')}
+      />
     )
   }
 
@@ -604,6 +598,7 @@ function OpenAICompatSetup({
         <Box flexDirection="column">
           <Text color="yellow">Could not auto-detect models:</Text>
           <Text color="yellow">{fetchError}</Text>
+          <Text dimColor>Press Esc to go back and correct the base URL / API key.</Text>
         </Box>
       ) : (
         <Text dimColor>No models found at this endpoint.</Text>
@@ -646,7 +641,7 @@ function OpenRouterApiKeySetup({
     initialStep: 'api-key',
     initialApiKey: cfg.openrouterApiKey ?? '',
   })
-  const { step, apiKey, setApiKey, models, apiKeyCursor, setApiKeyCursor,
+  const { step, setStep, apiKey, setApiKey, models, apiKeyCursor, setApiKeyCursor,
     beginFetch, applyFetchedModels } = wiz
 
   useInput((_input, key) => {
@@ -718,14 +713,12 @@ function OpenRouterApiKeySetup({
   }
 
   return (
-    <Box flexDirection="column" gap={1}>
-      <Text bold>Select Model</Text>
-      <Text dimColor>Choose the model to use with OpenRouter:</Text>
-      <Select
-        options={models.map(m => ({ label: m.id, value: m.id }))}
-        onChange={(modelId: string) => saveAndDone(modelId)}
-      />
-    </Box>
+    <ModelSearchPicker
+      models={models}
+      title="Select OpenRouter Model"
+      onSelect={(modelId: string) => saveAndDone(modelId)}
+      onCancel={() => setStep('api-key')}
+    />
   )
 }
 
@@ -977,15 +970,11 @@ function AnthropicCompatApiKeySetup({
 
   if (step === 'model-select') {
     return (
-      <Box flexDirection="column" gap={1}>
-        <Text bold>Select Model</Text>
-        <Text dimColor>Choose the model to use with this provider:</Text>
-        <Select
-          options={models.map(m => ({ label: m.id, value: m.id }))}
-          onChange={(modelId: string) => saveAndDone(modelId)}
-          onCancel={() => setStep('api-key')}
-        />
-      </Box>
+      <ModelSearchPicker
+        models={models}
+        onSelect={(modelId: string) => saveAndDone(modelId)}
+        onCancel={() => setStep('api-key')}
+      />
     )
   }
 
@@ -995,8 +984,9 @@ function AnthropicCompatApiKeySetup({
       <Text bold>Model ID</Text>
       {fetchError ? (
         <Box flexDirection="column">
-          <Text color="yellow">Could not auto-detect models (tried /models, /v1/models):</Text>
+          <Text color="yellow">Could not auto-detect models:</Text>
           <Text color="yellow">{fetchError}</Text>
+          <Text dimColor>Press Esc to go back and correct the base URL / API key.</Text>
         </Box>
       ) : (
         <Text dimColor>Models fetched but no match found.</Text>
@@ -1028,7 +1018,7 @@ type PickerState =
   | { phase: 'openrouter-setup' }
   | { phase: 'anthropic-compat-setup' }
 
-function ProviderPickerWrapper({
+export function ProviderPickerWrapper({
   onDone,
   context,
 }: {
