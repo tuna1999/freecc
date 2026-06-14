@@ -8,18 +8,20 @@ import { useKeybindings } from '../keybindings/useKeybinding.js';
 import { isAnthropicAuthEnabled } from '../utils/auth.js';
 import { normalizeApiKeyForConfig } from '../utils/authPortable.js';
 import { getCustomApiKeyStatus } from '../utils/config.js';
+import { getGlobalConfig } from '../utils/config.js';
 import { env } from '../utils/env.js';
 import { isRunningOnHomespace } from '../utils/envUtils.js';
 import { PreflightStep } from '../utils/preflightChecks.js';
 import type { ThemeSetting } from '../utils/theme.js';
 import { ApproveApiKey } from './ApproveApiKey.js';
+import { OnboardingProviderStep } from '../commands/provider/OnboardingProviderStep.js';
 import { ConsoleOAuthFlow } from './ConsoleOAuthFlow.js';
 import { Select } from './CustomSelect/select.js';
 import { WelcomeV2 } from './LogoV2/WelcomeV2.js';
 import { PressEnterToContinue } from './PressEnterToContinue.js';
 import { ThemePicker } from './ThemePicker.js';
 import { OrderedList } from './ui/OrderedList.js';
-type StepId = 'preflight' | 'theme' | 'oauth' | 'api-key' | 'security' | 'terminal-setup';
+type StepId = 'preflight' | 'theme' | 'provider' | 'oauth' | 'api-key' | 'security' | 'terminal-setup';
 interface OnboardingStep {
   id: StepId;
   component: React.ReactNode;
@@ -94,6 +96,9 @@ export function Onboarding({
       <PressEnterToContinue />
     </Box>;
   const preflightStep = <PreflightStep onSuccess={goToNextStep} />;
+  const providerStep = <Box marginTop={1}>
+      <OnboardingProviderStep onAdvance={goToNextStep} />
+    </Box>;
   // Create the steps array - determine which steps to include based on reAuth and oauthEnabled
   const apiKeyNeedingApproval = useMemo(() => {
     // Add API key step if needed
@@ -106,6 +111,22 @@ export function Onboarding({
     if (getCustomApiKeyStatus(customApiKeyTruncated) === 'new') {
       return customApiKeyTruncated;
     }
+  }, []);
+  const shouldOfferProviderStep = useMemo(() => {
+    // Offer the provider/model step only when NOTHING is configured yet:
+    // no ANTHROPIC_API_KEY (env) being used, and no custom provider config.
+    // Mirrors apiKeyNeedingApproval's homespace handling — there the env key
+    // is ignored, so the user still needs a provider to talk to.
+    const envKeyActive = !!process.env.ANTHROPIC_API_KEY && !isRunningOnHomespace();
+    if (envKeyActive) return false;
+    const cfg = getGlobalConfig();
+    const hasCustomProvider =
+      !!cfg.openaiApiKey ||
+      !!cfg.openaiBaseUrl ||
+      !!cfg.anthropicCompatApiKey ||
+      !!cfg.anthropicCompatBaseUrl ||
+      !!cfg.openrouterApiKey;
+    return !hasCustomProvider;
   }, []);
   function handleApiKeyDone(approved: boolean) {
     if (approved) {
@@ -124,6 +145,12 @@ export function Onboarding({
     id: 'theme',
     component: themeStep
   });
+  if (shouldOfferProviderStep) {
+    steps.push({
+      id: 'provider',
+      component: providerStep
+    });
+  }
   if (apiKeyNeedingApproval) {
     steps.push({
       id: 'api-key',
