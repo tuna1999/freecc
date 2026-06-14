@@ -486,6 +486,7 @@ function OpenAICompatSetup({
   useInput((_input, key) => {
     if (!key.escape) return
     if (step === 'base-url') onBack()
+    else if (step === 'model') setStep('api-key')
     else onEscape()
   }, { isActive: step !== 'loading' })
 
@@ -873,6 +874,7 @@ function AnthropicCompatApiKeySetup({
   useInput((_input, key) => {
     if (!key.escape) return
     if (step === 'base-url') onBack()
+    else if (step === 'model') setStep('api-key')
     else onEscape()
   }, { isActive: step !== 'loading' })
 
