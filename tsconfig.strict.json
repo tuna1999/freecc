@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitAny": true,
+    "ignoreDeprecations": "6.0"
+  },
+  "include": [
+    "src/commands/provider/planProviderSwitch.ts",
+    "src/commands/provider/fetchModels.ts",
+    "src/commands/provider/fetchModels.test.ts",
+    "src/commands/provider/planProviderSwitch.test.ts",
+    "src/test/smoke.test.ts"
+  ]
+}
