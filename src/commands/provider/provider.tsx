@@ -110,8 +110,11 @@ function getProviderLabel(provider: APIProvider): string {
  *     additionally pass configFields, modelId, onChangeAPIKey, onDone.
  *
  * The legacy `applyProvider(provider)` is now a thin alias for shape #1.
+ *
+ * @internal — exported for unit tests in src/commands/provider/provider.test.ts
+ * @see P6.2 in the refactor plan
  */
-function applyProviderSwitch(params: {
+export function applyProviderSwitch(params: {
   provider: APIProvider
   setAppState: ReturnType<typeof useSetAppState>
   message: string
@@ -166,8 +169,10 @@ function applyProvider(
 
 /**
  * Check if credentials/config exist for a given provider.
+ *
+ * @internal — exported for unit tests in src/commands/provider/provider.test.ts
  */
-function hasProviderCredentials(provider: APIProvider): boolean {
+export function hasProviderCredentials(provider: APIProvider): boolean {
   switch (provider) {
     case 'firstParty':
       return hasAnthropicApiKeyAuth() || !!process.env.ANTHROPIC_API_KEY
