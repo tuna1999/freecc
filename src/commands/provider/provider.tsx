@@ -18,6 +18,7 @@ import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { OPENROUTER_DEFAULT_BASE_URL } from '../../services/api/chat-completions-adapter.js'
 import { getAPIProvider, type APIProvider } from '../../utils/model/providers.js'
 import { fetchModelsFromBaseUrl } from './fetchModels.js'
+import { useProviderSetupWizard } from './useProviderSetupWizard.js'
 import { setMainLoopModelOverride } from '../../bootstrap/state.js'
 import { useSetAppState } from '../../state/AppState.js'
 import { updateSettingsForSource } from '../../utils/settings/settings.js'
@@ -330,17 +331,19 @@ function OpenAIApiKeySetup({
 }): React.ReactNode {
   const cfg = getGlobalConfig()
   const setAppState = useSetAppState()
-  const [step, setStep] = React.useState<'api-key' | 'base-url' | 'loading' | 'model-select'>('api-key')
-  const [apiKey, setApiKey] = React.useState(cfg.openaiApiKey ?? '')
-  const [baseUrl, setBaseUrl] = React.useState(cfg.openaiBaseUrl ?? '')
-  const [models, setModels] = React.useState<Array<{ id: string }>>([])
-  const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.openaiApiKey?.length ?? 0)
-  const [baseUrlCursor, setBaseUrlCursor] = React.useState(cfg.openaiBaseUrl?.length ?? 0)
+  const wiz = useProviderSetupWizard({
+    initialStep: 'api-key',
+    initialApiKey: cfg.openaiApiKey ?? '',
+    initialBaseUrl: cfg.openaiBaseUrl ?? '',
+  })
+  const { step, setStep, apiKey, setApiKey, baseUrl, setBaseUrl, models,
+    apiKeyCursor, setApiKeyCursor, baseUrlCursor, setBaseUrlCursor, onEscape,
+    beginFetch, applyFetchedModels } = wiz
 
   useInput((_input, key) => {
     if (!key.escape) return
     if (step === 'api-key') onBack()
-    else if (step === 'base-url') setStep('api-key')
+    else onEscape()
   }, { isActive: step === 'api-key' || step === 'base-url' })
 
   function saveAndDone(modelId?: string) {
@@ -363,16 +366,13 @@ function OpenAIApiKeySetup({
 
   function fetchModels() {
     const base = baseUrl || 'https://api.openai.com/v1'
-    setStep('loading')
+    beginFetch()
     void fetchModelsFromBaseUrl({
       baseUrl: base,
       apiKey,
       paths: ['/models'],
       authStyle: 'bearer',
-      onSuccess: (sorted) => {
-        setModels(sorted.map(id => ({ id })))
-        setStep('model-select')
-      },
+      onSuccess: applyFetchedModels,
       onError: () => {
         saveAndDone()
       },
@@ -466,23 +466,20 @@ function OpenAICompatSetup({
 }): React.ReactNode {
   const cfg = getGlobalConfig()
   const setAppState = useSetAppState()
-  const [step, setStep] = React.useState<'base-url' | 'api-key' | 'loading' | 'model-select' | 'model'>('base-url')
-  const [baseUrl, setBaseUrl] = React.useState(cfg.openaiBaseUrl ?? '')
-  const [apiKey, setApiKey] = React.useState(cfg.openaiApiKey ?? '')
-  const [models, setModels] = React.useState<Array<{ id: string }>>([])
-  const [fetchError, setFetchError] = React.useState('')
-  const [manualModel, setManualModel] = React.useState('')
-  const [baseUrlCursor, setBaseUrlCursor] = React.useState(cfg.openaiBaseUrl?.length ?? 0)
-  const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.openaiApiKey?.length ?? 0)
-  const [modelCursor, setModelCursor] = React.useState(0)
+  const wiz = useProviderSetupWizard({
+    initialStep: 'base-url',
+    initialApiKey: cfg.openaiApiKey ?? '',
+    initialBaseUrl: cfg.openaiBaseUrl ?? '',
+  })
+  const { step, setStep, baseUrl, setBaseUrl, apiKey, setApiKey, models,
+    fetchError, manualModel, setManualModel, modelCursor, setModelCursor,
+    baseUrlCursor, setBaseUrlCursor, apiKeyCursor, setApiKeyCursor,
+    onEscape, beginFetch, applyFetchedModels, applyFetchError } = wiz
 
   useInput((_input, key) => {
     if (!key.escape) return
     if (step === 'base-url') onBack()
-    else if (step === 'api-key') setStep('base-url')
-    else if (step === 'loading') setStep('api-key')
-    else if (step === 'model-select') setStep('api-key')
-    else if (step === 'model') setStep('api-key')
+    else onEscape()
   }, { isActive: step !== 'loading' })
 
   function saveAndDone(modelId?: string) {
@@ -503,24 +500,20 @@ function OpenAICompatSetup({
   }
 
   function fetchModels(url: string, key: string) {
-    setStep('loading')
+    beginFetch()
     void fetchModelsFromBaseUrl({
       baseUrl: url,
       apiKey: key,
       paths: ['/v1/models', '/models'],
       authStyle: 'bearer',
       onSuccess: (sorted) => {
-        setModels(sorted.map(id => ({ id })))
         saveGlobalConfig(current => ({
           ...current,
           openaiAvailableModels: sorted,
         }))
-        setStep('model-select')
+        applyFetchedModels(sorted)
       },
-      onError: (lastError) => {
-        setFetchError(lastError)
-        setStep('model')
-      },
+      onError: applyFetchError,
     })
   }
 
@@ -640,10 +633,12 @@ function OpenRouterApiKeySetup({
 }): React.ReactNode {
   const cfg = getGlobalConfig()
   const setAppState = useSetAppState()
-  const [step, setStep] = React.useState<'api-key' | 'loading' | 'model-select'>('api-key')
-  const [apiKey, setApiKey] = React.useState(cfg.openrouterApiKey ?? '')
-  const [models, setModels] = React.useState<Array<{ id: string }>>([])
-  const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.openrouterApiKey?.length ?? 0)
+  const wiz = useProviderSetupWizard({
+    initialStep: 'api-key',
+    initialApiKey: cfg.openrouterApiKey ?? '',
+  })
+  const { step, apiKey, setApiKey, models, apiKeyCursor, setApiKeyCursor,
+    beginFetch, applyFetchedModels } = wiz
 
   useInput((_input, key) => {
     if (!key.escape) return
@@ -667,16 +662,13 @@ function OpenRouterApiKeySetup({
   }
 
   function fetchModels(key: string) {
-    setStep('loading')
+    beginFetch()
     void fetchModelsFromBaseUrl({
       baseUrl: OPENROUTER_DEFAULT_BASE_URL,
       apiKey: key,
       paths: ['/models'],
       authStyle: 'bearer',
-      onSuccess: (sorted) => {
-        setModels(sorted.map(id => ({ id })))
-        setStep('model-select')
-      },
+      onSuccess: applyFetchedModels,
       onError: () => {
         saveAndDone()
       },
@@ -865,24 +857,22 @@ function AnthropicCompatApiKeySetup({
 }): React.ReactNode {
   const cfg = getGlobalConfig()
   const setAppState = useSetAppState()
-  const [step, setStep] = React.useState<'base-url' | 'api-key' | 'loading' | 'model-select' | 'model'>('base-url')
-  const [baseUrl, setBaseUrl] = React.useState(cfg.anthropicCompatBaseUrl ?? '')
-  const [apiKey, setApiKey] = React.useState(cfg.anthropicCompatApiKey ?? '')
-  const [model, setModel] = React.useState(cfg.anthropicCompatModel ?? '')
-  const [models, setModels] = React.useState<Array<{ id: string }>>([])
-  const [fetchError, setFetchError] = React.useState<string>('')
-  const [baseUrlCursor, setBaseUrlCursor] = React.useState(cfg.anthropicCompatBaseUrl?.length ?? 0)
-  const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.anthropicCompatApiKey?.length ?? 0)
-  const [modelCursor, setModelCursor] = React.useState(cfg.anthropicCompatModel?.length ?? 0)
+  const wiz = useProviderSetupWizard({
+    initialStep: 'base-url',
+    initialApiKey: cfg.anthropicCompatApiKey ?? '',
+    initialBaseUrl: cfg.anthropicCompatBaseUrl ?? '',
+    initialManualModel: cfg.anthropicCompatModel ?? '',
+  })
+  const { step, setStep, baseUrl, setBaseUrl, apiKey, setApiKey, models,
+    fetchError, manualModel, setManualModel, modelCursor, setModelCursor,
+    baseUrlCursor, setBaseUrlCursor, apiKeyCursor, setApiKeyCursor,
+    onEscape, beginFetch, applyFetchedModels, applyFetchError } = wiz
 
   useInput((_input, key) => {
     if (!key.escape) return
     if (step === 'base-url') onBack()
-    else if (step === 'api-key') setStep('base-url')
-    else if (step === 'loading') setStep('api-key')
-    else if (step === 'model-select') setStep('api-key')
-    else if (step === 'model') setStep('api-key')
-  }, { isActive: step === 'base-url' || step === 'api-key' || step === 'loading' || step === 'model-select' || step === 'model' })
+    else onEscape()
+  }, { isActive: step !== 'loading' })
 
   function saveAndDone(modelId?: string) {
     applyProviderSwitch({
@@ -901,24 +891,20 @@ function AnthropicCompatApiKeySetup({
   }
 
   function fetchModels(url: string, key: string) {
-    setStep('loading')
+    beginFetch()
     void fetchModelsFromBaseUrl({
       baseUrl: url,
       apiKey: key,
       paths: ['/models', '/v1/models'],
       authStyle: 'x-api-key',
       onSuccess: (sorted) => {
-        setModels(sorted.map(id => ({ id })))
         saveGlobalConfig(current => ({
           ...current,
           anthropicCompatAvailableModels: sorted,
         }))
-        setStep('model-select')
+        applyFetchedModels(sorted)
       },
-      onError: (lastError) => {
-        setFetchError(lastError)
-        setStep('model')
-      },
+      onError: applyFetchError,
     })
   }
 
@@ -1008,8 +994,8 @@ function AnthropicCompatApiKeySetup({
       )}
       <Text dimColor>Enter the model ID to use:</Text>
       <TextInput
-        value={model}
-        onChange={setModel}
+        value={manualModel}
+        onChange={setManualModel}
         cursorOffset={modelCursor}
         onChangeCursorOffset={setModelCursor}
         onSubmit={(value: string) => {
