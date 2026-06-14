@@ -71,14 +71,27 @@ const PROVIDER_OPTIONS: Array<{
   },
 ]
 
-const PROVIDER_ENV_VARS = [
-  'CLAUDE_CODE_USE_BEDROCK',
-  'CLAUDE_CODE_USE_VERTEX',
-  'CLAUDE_CODE_USE_FOUNDRY',
-  'CLAUDE_CODE_USE_OPENAI',
-  'CLAUDE_CODE_USE_OPENROUTER',
-  'CLAUDE_CODE_USE_ANTHROPIC_COMPAT',
-]
+/**
+ * Clear every provider env var declared in PROVIDER_OPTIONS.
+ * Single source of truth — adding a new provider here will automatically
+ * include its env var in the clear sweep.
+ */
+function clearAllProviderEnvVars(): void {
+  for (const opt of PROVIDER_OPTIONS) {
+    if (opt.envVar) delete process.env[opt.envVar]
+  }
+}
+
+/**
+ * Activate the env var for a given provider (no-op for providers without one,
+ * e.g. 'firstParty' which is the default direct-Anthropic path).
+ */
+function setProviderEnvVar(provider: APIProvider): void {
+  const option = PROVIDER_OPTIONS.find(o => o.value === provider)
+  if (option?.envVar) {
+    process.env[option.envVar] = '1'
+  }
+}
 
 function getProviderLabel(provider: APIProvider): string {
   return PROVIDER_OPTIONS.find(o => o.value === provider)?.label ?? provider
@@ -86,15 +99,10 @@ function getProviderLabel(provider: APIProvider): string {
 
 function applyProvider(provider: APIProvider): void {
   // Clear all provider env vars first
-  for (const envVar of PROVIDER_ENV_VARS) {
-    delete process.env[envVar]
-  }
+  clearAllProviderEnvVars()
 
   // Set the selected provider's env var
-  const option = PROVIDER_OPTIONS.find(o => o.value === provider)
-  if (option && option.envVar) {
-    process.env[option.envVar] = '1'
-  }
+  setProviderEnvVar(provider)
 
   // Clear stale model from settings — the old provider's model won't work
   // with the new provider. The new provider's default will be used instead.
@@ -131,13 +139,8 @@ function applyProviderSwitch(params: {
     ...configFields,
     apiProvider: provider,
   }))
-  for (const envVar of PROVIDER_ENV_VARS) {
-    delete process.env[envVar]
-  }
-  const option = PROVIDER_OPTIONS.find(o => o.value === provider)
-  if (option?.envVar) {
-    process.env[option.envVar] = '1'
-  }
+  clearAllProviderEnvVars()
+  setProviderEnvVar(provider)
   setMainLoopModelOverride(modelId || undefined)
   updateSettingsForSource('userSettings', { model: modelId || undefined })
   setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
