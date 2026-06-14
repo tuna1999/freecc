@@ -66,7 +66,8 @@ type Props = {
   onSelect: (modelId: string) => void
   onCancel: () => void
   emptyMessage?: string            // shown when filtered list is empty
-  matchLabel?: (shown: number, total: number) => string  // "12 / 240 models"
+  // matchLabel passed to FuzzyPicker must be a string; wrapper computes it
+  // from (filtered.length, models.length), e.g. "12 / 240 models".
 }
 ```
 
@@ -133,16 +134,26 @@ OpenAI-direct and OpenRouter already call `saveAndDone(undefined)` on error — 
 
 ### Onboarding: new provider/model step
 
-`Onboarding.tsx` gains a conditional step that re-uses the existing wizard. Because
-`AnthropicCompatApiKeySetup` (and siblings) are tightly coupled to the `/provider` command
-context (`LocalJSXCommandOnDone`, `setAppState`, `onChangeAPIKey`), we **extract** the
-inner setup UI into a shared component or invoke the provider picker flow directly.
+`Onboarding.tsx` gains a conditional step that re-uses the existing wizard. The wizard
+components (`AnthropicCompatApiKeySetup`, `OpenAIApiKeySetup`, …, via
+`ProviderPickerWrapper`) take `onDone: LocalJSXCommandOnDone` = `(result?, options?) => void`
+and `context: LocalJSXCommandContext`. Onboarding passes only `onDone(): void` (see
+`interactiveHelpers.tsx:117`). These signatures do **not** line up directly.
 
-**Decision (to confirm in implementation):** the cleanest re-use is to render the existing
-`ProviderPickerWrapper` (or a trimmed variant) inside an onboarding step. The step calls
-`onDone` (the onboarding "advance" callback) once the user has selected a provider + model
-(or skipped). `applyProviderSwitch` already persists config and sets app state, so the
-onboarding step needs no new persistence logic.
+**Decision (resolved):** introduce a thin adapter component
+`src/commands/provider/OnboardingProviderStep.tsx` that:
+
+1. Renders `ProviderPickerWrapper` with a synthesized `LocalJSXCommandContext` (the real
+   one is built in `commands.ts`; onboarding needs only `onChangeAPIKey: () => {}` no-op and
+   whatever minimal fields the wrapper reads — confirm the exact shape at implementation
+   time, but the wrapper's `context` usage is limited to `onChangeAPIKey`).
+2. Adapts the wizard's `onDone(result, options)` → onboarding's `onDone()` by ignoring the
+   message/options args (the provider switch already printed its own message and persisted
+   config via `applyProviderSwitch`).
+
+This avoids refactoring the wizard's callback signatures (which would ripple through the
+`/provider` command path) and keeps the re-use seam in one new file. The step calls
+onboarding's advance callback once the user has selected (or skipped).
 
 **Visibility condition (per user choice "only when not configured"):** the step appears
 iff **all** of:
@@ -186,8 +197,9 @@ during implementation — low cost to move.)
 |---|---|
 | `src/commands/provider/ModelSearchPicker.tsx` | **NEW** — `FuzzyPicker<string>` wrapper + multi-word filter |
 | `src/commands/provider/ModelSearchPicker.test.ts` | **NEW** — unit tests for the filter (pure function) |
-| `src/commands/provider/provider.tsx` | Replace 4× `<Select>` with `<ModelSearchPicker>`; add error header to 2 compat flows' model-select |
-| `src/components/Onboarding.tsx` | Add conditional `provider` step re-using the wizard; visibility gate |
+| `src/commands/provider/provider.tsx` | Replace 4× `<Select>` with `<ModelSearchPicker>` at each `model-select` step; expand the error message on the 2 compat flows' `model` (manual) step to name tried paths + statuses |
+| `src/components/Onboarding.tsx` | Add conditional `provider` step re-using the wizard via a thin adapter; visibility gate |
+| `src/commands/provider/OnboardingProviderStep.tsx` | **NEW** — adapter mapping onboarding's `onDone(): void` to the wizard's `LocalJSXCommandOnDone` callback shape |
 
 ## Error handling
 
@@ -217,10 +229,10 @@ during implementation — low cost to move.)
 
 ## Open questions for implementation
 
-1. Exact re-use seam for the provider wizard inside onboarding: extract a shared
-   `<ProviderSetupFlow>` or render `ProviderPickerWrapper` directly? Confirm by reading
-   `ProviderPickerWrapper`'s props at implementation time.
-2. Step ordering (after theme, before security) — confirmable cheaply.
+1. ~~Exact re-use seam~~ → **RESOLVED**: thin adapter `OnboardingProviderStep.tsx` rendering
+   `ProviderPickerWrapper` (see Onboarding section). Implementation must confirm the exact
+   `LocalJSXCommandContext` fields the wrapper reads beyond `onChangeAPIKey`.
+2. Step ordering (after theme, before security) — confirmable cheaply during implementation.
 3. Whether OpenAI-direct and OpenRouter's `saveAndDone(undefined)` error path should also
    gain visibility in a follow-up (out of scope B; flagged).
 
