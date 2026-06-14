@@ -17,6 +17,8 @@ import { getCodexOAuthTokens, hasAnthropicApiKeyAuth } from '../../utils/auth.js
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { OPENROUTER_DEFAULT_BASE_URL } from '../../services/api/chat-completions-adapter.js'
 import { getAPIProvider, type APIProvider } from '../../utils/model/providers.js'
+import { fetchModelsFromBaseUrl } from './fetchModels.js'
+import { useProviderSetupWizard } from './useProviderSetupWizard.js'
 import { setMainLoopModelOverride } from '../../bootstrap/state.js'
 import { useSetAppState } from '../../state/AppState.js'
 import { updateSettingsForSource } from '../../utils/settings/settings.js'
@@ -71,84 +73,106 @@ const PROVIDER_OPTIONS: Array<{
   },
 ]
 
-const PROVIDER_ENV_VARS = [
-  'CLAUDE_CODE_USE_BEDROCK',
-  'CLAUDE_CODE_USE_VERTEX',
-  'CLAUDE_CODE_USE_FOUNDRY',
-  'CLAUDE_CODE_USE_OPENAI',
-  'CLAUDE_CODE_USE_OPENROUTER',
-  'CLAUDE_CODE_USE_ANTHROPIC_COMPAT',
-]
+/**
+ * Clear every provider env var declared in PROVIDER_OPTIONS.
+ * Single source of truth — adding a new provider here will automatically
+ * include its env var in the clear sweep.
+ */
+function clearAllProviderEnvVars(): void {
+  for (const opt of PROVIDER_OPTIONS) {
+    if (opt.envVar) delete process.env[opt.envVar]
+  }
+}
+
+/**
+ * Activate the env var for a given provider (no-op for providers without one,
+ * e.g. 'firstParty' which is the default direct-Anthropic path).
+ */
+function setProviderEnvVar(provider: APIProvider): void {
+  const option = PROVIDER_OPTIONS.find(o => o.value === provider)
+  if (option?.envVar) {
+    process.env[option.envVar] = '1'
+  }
+}
 
 function getProviderLabel(provider: APIProvider): string {
   return PROVIDER_OPTIONS.find(o => o.value === provider)?.label ?? provider
 }
 
-function applyProvider(provider: APIProvider): void {
-  // Clear all provider env vars first
-  for (const envVar of PROVIDER_ENV_VARS) {
-    delete process.env[envVar]
-  }
-
-  // Set the selected provider's env var
-  const option = PROVIDER_OPTIONS.find(o => o.value === provider)
-  if (option && option.envVar) {
-    process.env[option.envVar] = '1'
-  }
-
-  // Clear stale model from settings — the old provider's model won't work
-  // with the new provider. The new provider's default will be used instead.
-  updateSettingsForSource('userSettings', { model: undefined })
-
-  // Clear the in-memory model override so model resolution falls through
-  // to the new provider's default instead of reusing the old provider's model.
-  setMainLoopModelOverride(undefined)
-
-  // Persist the choice so it survives restarts
-  saveGlobalConfig((current) => ({
-    ...current,
-    apiProvider: provider,
-  }))
-}
-
 /**
  * Shared helper for saving provider config and syncing state across all layers.
- * Each caller only provides provider-specific config fields and a message.
+ *
+ * Two caller shapes are supported:
+ *  1. Pure provider switch (e.g. CLI flag, picker, OAuth completion):
+ *     pass only { provider, setAppState, message } — model and config are
+ *     cleared, no onChangeAPIKey / onDone callbacks fire.
+ *  2. Setup with credentials (api-key / base-url / model flows):
+ *     additionally pass configFields, modelId, onChangeAPIKey, onDone.
+ *
+ * The legacy `applyProvider(provider)` is now a thin alias for shape #1.
+ *
+ * @internal — exported for unit tests in src/commands/provider/provider.test.ts
+ * @see P6.2 in the refactor plan
  */
-function applyProviderSwitch(params: {
+export function applyProviderSwitch(params: {
   provider: APIProvider
-  configFields: Record<string, unknown>
-  modelId?: string
-  message: string
   setAppState: ReturnType<typeof useSetAppState>
-  onChangeAPIKey: () => void
-  onDone: (msg: string) => void
+  message: string
+  configFields?: Record<string, unknown>
+  modelId?: string
+  onChangeAPIKey?: () => void
+  onDone?: (msg: string) => void
 }): void {
-  const { provider, configFields, modelId, message, setAppState, onChangeAPIKey, onDone } = params
+  const {
+    provider,
+    configFields = {},
+    modelId,
+    message,
+    setAppState,
+    onChangeAPIKey,
+    onDone,
+  } = params
 
+  // 1. Persist provider choice + any per-provider config to ~/.freecc.json
   saveGlobalConfig(current => ({
     ...current,
     ...configFields,
     apiProvider: provider,
   }))
-  for (const envVar of PROVIDER_ENV_VARS) {
-    delete process.env[envVar]
-  }
-  const option = PROVIDER_OPTIONS.find(o => o.value === provider)
-  if (option?.envVar) {
-    process.env[option.envVar] = '1'
-  }
+
+  // 2. Sync env vars (clear all, set the active one)
+  clearAllProviderEnvVars()
+  setProviderEnvVar(provider)
+
+  // 3. Sync model across all three layers: bootstrap override, userSettings,
+  // and in-memory AppState. modelId undefined → cleared in all three.
   setMainLoopModelOverride(modelId || undefined)
   updateSettingsForSource('userSettings', { model: modelId || undefined })
   setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
-  onChangeAPIKey()
-  onDone(message)
+
+  // 4. Optional side effects (used by setup flows)
+  onChangeAPIKey?.()
+  onDone?.(message)
+}
+
+/**
+ * Backwards-compatible alias for the "no config, no model" case.
+ * Used by callers that just want to switch provider and clear the
+ * previous model.
+ */
+function applyProvider(
+  provider: APIProvider,
+  setAppState: ReturnType<typeof useSetAppState>,
+): void {
+  applyProviderSwitch({ provider, setAppState, message: '' })
 }
 
 /**
  * Check if credentials/config exist for a given provider.
+ *
+ * @internal — exported for unit tests in src/commands/provider/provider.test.ts
  */
-function hasProviderCredentials(provider: APIProvider): boolean {
+export function hasProviderCredentials(provider: APIProvider): boolean {
   switch (provider) {
     case 'firstParty':
       return hasAnthropicApiKeyAuth() || !!process.env.ANTHROPIC_API_KEY
@@ -211,11 +235,12 @@ function PlatformSetupInfo({
   onBack: () => void
 }): React.ReactNode {
   const info = PROVIDER_DOCS[provider]
+  const setAppState = useSetAppState()
 
   const handleSelect = React.useCallback(
     (value: string) => {
       if (value === 'switch') {
-        applyProvider(provider)
+        applyProvider(provider, setAppState)
         onDone(
           `Switched provider to ${chalk.bold(getProviderLabel(provider))}. Set the required environment variables, then restart Claude Code.`,
         )
@@ -273,13 +298,14 @@ function OAuthLoginFlow({
   onBack: () => void
   targetProvider?: APIProvider
 }): React.ReactNode {
+  const setAppState = useSetAppState()
   return (
     <Login
       onDone={(success: boolean) => {
         if (success) {
           context.onChangeAPIKey()
           if (targetProvider) {
-            applyProvider(targetProvider)
+            applyProvider(targetProvider, setAppState)
           }
           const label = targetProvider
             ? getProviderLabel(targetProvider)
@@ -310,17 +336,19 @@ function OpenAIApiKeySetup({
 }): React.ReactNode {
   const cfg = getGlobalConfig()
   const setAppState = useSetAppState()
-  const [step, setStep] = React.useState<'api-key' | 'base-url' | 'loading' | 'model-select'>('api-key')
-  const [apiKey, setApiKey] = React.useState(cfg.openaiApiKey ?? '')
-  const [baseUrl, setBaseUrl] = React.useState(cfg.openaiBaseUrl ?? '')
-  const [models, setModels] = React.useState<Array<{ id: string }>>([])
-  const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.openaiApiKey?.length ?? 0)
-  const [baseUrlCursor, setBaseUrlCursor] = React.useState(cfg.openaiBaseUrl?.length ?? 0)
+  const wiz = useProviderSetupWizard({
+    initialStep: 'api-key',
+    initialApiKey: cfg.openaiApiKey ?? '',
+    initialBaseUrl: cfg.openaiBaseUrl ?? '',
+  })
+  const { step, setStep, apiKey, setApiKey, baseUrl, setBaseUrl, models,
+    apiKeyCursor, setApiKeyCursor, baseUrlCursor, setBaseUrlCursor, onEscape,
+    beginFetch, applyFetchedModels } = wiz
 
   useInput((_input, key) => {
     if (!key.escape) return
     if (step === 'api-key') onBack()
-    else if (step === 'base-url') setStep('api-key')
+    else onEscape()
   }, { isActive: step === 'api-key' || step === 'base-url' })
 
   function saveAndDone(modelId?: string) {
@@ -342,26 +370,18 @@ function OpenAIApiKeySetup({
   }
 
   function fetchModels() {
-    const base = (baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
-    setStep('loading')
-    globalThis.fetch(`${base}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    })
-      .then(r => r.json())
-      .then((data: unknown) => {
-        const list: Array<{ id: string }> = Array.isArray((data as { data?: unknown }).data)
-          ? (data as { data: Array<{ id: string }> }).data
-          : []
-        if (list.length > 0) {
-          setModels(list.sort((a, b) => a.id.localeCompare(b.id)))
-          setStep('model-select')
-        } else {
-          saveAndDone()
-        }
-      })
-      .catch(() => {
+    const base = baseUrl || 'https://api.openai.com/v1'
+    beginFetch()
+    void fetchModelsFromBaseUrl({
+      baseUrl: base,
+      apiKey,
+      paths: ['/models'],
+      authStyle: 'bearer',
+      onSuccess: applyFetchedModels,
+      onError: () => {
         saveAndDone()
-      })
+      },
+    })
   }
 
   if (step === 'api-key') {
@@ -451,23 +471,20 @@ function OpenAICompatSetup({
 }): React.ReactNode {
   const cfg = getGlobalConfig()
   const setAppState = useSetAppState()
-  const [step, setStep] = React.useState<'base-url' | 'api-key' | 'loading' | 'model-select' | 'model'>('base-url')
-  const [baseUrl, setBaseUrl] = React.useState(cfg.openaiBaseUrl ?? '')
-  const [apiKey, setApiKey] = React.useState(cfg.openaiApiKey ?? '')
-  const [models, setModels] = React.useState<Array<{ id: string }>>([])
-  const [fetchError, setFetchError] = React.useState('')
-  const [manualModel, setManualModel] = React.useState('')
-  const [baseUrlCursor, setBaseUrlCursor] = React.useState(cfg.openaiBaseUrl?.length ?? 0)
-  const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.openaiApiKey?.length ?? 0)
-  const [modelCursor, setModelCursor] = React.useState(0)
+  const wiz = useProviderSetupWizard({
+    initialStep: 'base-url',
+    initialApiKey: cfg.openaiApiKey ?? '',
+    initialBaseUrl: cfg.openaiBaseUrl ?? '',
+  })
+  const { step, setStep, baseUrl, setBaseUrl, apiKey, setApiKey, models,
+    fetchError, manualModel, setManualModel, modelCursor, setModelCursor,
+    baseUrlCursor, setBaseUrlCursor, apiKeyCursor, setApiKeyCursor,
+    onEscape, beginFetch, applyFetchedModels, applyFetchError } = wiz
 
   useInput((_input, key) => {
     if (!key.escape) return
     if (step === 'base-url') onBack()
-    else if (step === 'api-key') setStep('base-url')
-    else if (step === 'loading') setStep('api-key')
-    else if (step === 'model-select') setStep('api-key')
-    else if (step === 'model') setStep('api-key')
+    else onEscape()
   }, { isActive: step !== 'loading' })
 
   function saveAndDone(modelId?: string) {
@@ -488,70 +505,21 @@ function OpenAICompatSetup({
   }
 
   function fetchModels(url: string, key: string) {
-    const base = url.replace(/\/+$/, '')
-    setStep('loading')
-    const paths = ['/v1/models', '/models']
-    let lastError = ''
-
-    function tryNext(idx: number) {
-      if (idx >= paths.length) {
-        setFetchError(lastError)
-        setStep('model')
-        return
-      }
-      const fetchUrl = `${base}${paths[idx]}`
-      const headers: Record<string, string> = {}
-      if (key) {
-        headers.Authorization = `Bearer ${key}`
-      }
-      globalThis.fetch(fetchUrl, { headers })
-        .then(r => {
-          if (!r.ok) {
-            lastError = `${paths[idx]} → HTTP ${r.status}`
-            tryNext(idx + 1)
-            return null
-          }
-          return r.json()
-        })
-        .then((data: unknown | null) => {
-          if (data === null) return
-          let list: Array<{ id: string }> = []
-          const d = data as Record<string, unknown>
-          if (Array.isArray(d.data)) {
-            list = (d.data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          if (list.length === 0 && Array.isArray(d.models)) {
-            list = (d.models as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          if (list.length === 0 && Array.isArray(data)) {
-            list = (data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          if (list.length > 0) {
-            const sorted = list.sort((a, b) => a.id.localeCompare(b.id))
-            setModels(sorted)
-            saveGlobalConfig(current => ({
-              ...current,
-              openaiAvailableModels: sorted.map(m => m.id),
-            }))
-            setStep('model-select')
-          } else {
-            lastError = `${paths[idx]} → no models in response`
-            tryNext(idx + 1)
-          }
-        })
-        .catch((err: Error) => {
-          lastError = `${paths[idx]} → ${err.message}`
-          tryNext(idx + 1)
-        })
-    }
-
-    tryNext(0)
+    beginFetch()
+    void fetchModelsFromBaseUrl({
+      baseUrl: url,
+      apiKey: key,
+      paths: ['/v1/models', '/models'],
+      authStyle: 'bearer',
+      onSuccess: (sorted) => {
+        saveGlobalConfig(current => ({
+          ...current,
+          openaiAvailableModels: sorted,
+        }))
+        applyFetchedModels(sorted)
+      },
+      onError: applyFetchError,
+    })
   }
 
   if (step === 'base-url') {
@@ -670,10 +638,12 @@ function OpenRouterApiKeySetup({
 }): React.ReactNode {
   const cfg = getGlobalConfig()
   const setAppState = useSetAppState()
-  const [step, setStep] = React.useState<'api-key' | 'loading' | 'model-select'>('api-key')
-  const [apiKey, setApiKey] = React.useState(cfg.openrouterApiKey ?? '')
-  const [models, setModels] = React.useState<Array<{ id: string }>>([])
-  const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.openrouterApiKey?.length ?? 0)
+  const wiz = useProviderSetupWizard({
+    initialStep: 'api-key',
+    initialApiKey: cfg.openrouterApiKey ?? '',
+  })
+  const { step, apiKey, setApiKey, models, apiKeyCursor, setApiKeyCursor,
+    beginFetch, applyFetchedModels } = wiz
 
   useInput((_input, key) => {
     if (!key.escape) return
@@ -697,25 +667,17 @@ function OpenRouterApiKeySetup({
   }
 
   function fetchModels(key: string) {
-    setStep('loading')
-    globalThis.fetch(`${OPENROUTER_DEFAULT_BASE_URL}/models`, {
-      headers: { Authorization: `Bearer ${key}` },
-    })
-      .then(r => r.json())
-      .then((data: unknown) => {
-        const list: Array<{ id: string }> = Array.isArray((data as { data?: unknown }).data)
-          ? (data as { data: Array<{ id: string }> }).data
-          : []
-        if (list.length > 0) {
-          setModels(list.sort((a, b) => a.id.localeCompare(b.id)))
-          setStep('model-select')
-        } else {
-          saveAndDone()
-        }
-      })
-      .catch(() => {
+    beginFetch()
+    void fetchModelsFromBaseUrl({
+      baseUrl: OPENROUTER_DEFAULT_BASE_URL,
+      apiKey: key,
+      paths: ['/models'],
+      authStyle: 'bearer',
+      onSuccess: applyFetchedModels,
+      onError: () => {
         saveAndDone()
-      })
+      },
+    })
   }
 
   if (step === 'api-key') {
@@ -791,8 +753,7 @@ function OpenAIOptionsMenu({
             { display: 'system' },
           )
         } else {
-          applyProvider('openai')
-          setAppState(prev => ({ ...prev, mainLoopModel: null }))
+          applyProvider('openai', setAppState)
           onDone(
             `Switched provider to ${chalk.bold(getProviderLabel('openai'))}`,
           )
@@ -901,24 +862,22 @@ function AnthropicCompatApiKeySetup({
 }): React.ReactNode {
   const cfg = getGlobalConfig()
   const setAppState = useSetAppState()
-  const [step, setStep] = React.useState<'base-url' | 'api-key' | 'loading' | 'model-select' | 'model'>('base-url')
-  const [baseUrl, setBaseUrl] = React.useState(cfg.anthropicCompatBaseUrl ?? '')
-  const [apiKey, setApiKey] = React.useState(cfg.anthropicCompatApiKey ?? '')
-  const [model, setModel] = React.useState(cfg.anthropicCompatModel ?? '')
-  const [models, setModels] = React.useState<Array<{ id: string }>>([])
-  const [fetchError, setFetchError] = React.useState<string>('')
-  const [baseUrlCursor, setBaseUrlCursor] = React.useState(cfg.anthropicCompatBaseUrl?.length ?? 0)
-  const [apiKeyCursor, setApiKeyCursor] = React.useState(cfg.anthropicCompatApiKey?.length ?? 0)
-  const [modelCursor, setModelCursor] = React.useState(cfg.anthropicCompatModel?.length ?? 0)
+  const wiz = useProviderSetupWizard({
+    initialStep: 'base-url',
+    initialApiKey: cfg.anthropicCompatApiKey ?? '',
+    initialBaseUrl: cfg.anthropicCompatBaseUrl ?? '',
+    initialManualModel: cfg.anthropicCompatModel ?? '',
+  })
+  const { step, setStep, baseUrl, setBaseUrl, apiKey, setApiKey, models,
+    fetchError, manualModel, setManualModel, modelCursor, setModelCursor,
+    baseUrlCursor, setBaseUrlCursor, apiKeyCursor, setApiKeyCursor,
+    onEscape, beginFetch, applyFetchedModels, applyFetchError } = wiz
 
   useInput((_input, key) => {
     if (!key.escape) return
     if (step === 'base-url') onBack()
-    else if (step === 'api-key') setStep('base-url')
-    else if (step === 'loading') setStep('api-key')
-    else if (step === 'model-select') setStep('api-key')
-    else if (step === 'model') setStep('api-key')
-  }, { isActive: step === 'base-url' || step === 'api-key' || step === 'loading' || step === 'model-select' || step === 'model' })
+    else onEscape()
+  }, { isActive: step !== 'loading' })
 
   function saveAndDone(modelId?: string) {
     applyProviderSwitch({
@@ -937,75 +896,21 @@ function AnthropicCompatApiKeySetup({
   }
 
   function fetchModels(url: string, key: string) {
-    const base = url.replace(/\/+$/, '')
-    setStep('loading')
-    // Try multiple paths: /models, /v1/models
-    const paths = ['/models', '/v1/models']
-    let lastError = ''
-
-    function tryNext(idx: number) {
-      if (idx >= paths.length) {
-        setFetchError(lastError)
-        setStep('model')
-        return
-      }
-      const fetchUrl = `${base}${paths[idx]}`
-      globalThis.fetch(fetchUrl, {
-        headers: {
-          'x-api-key': key,
-          Authorization: `Bearer ${key}`,
-        },
-      })
-        .then(r => {
-          if (!r.ok) {
-            lastError = `${paths[idx]} → HTTP ${r.status}`
-            tryNext(idx + 1)
-            return null
-          }
-          return r.json()
-        })
-        .then((data: unknown | null) => {
-          if (data === null) return
-          // Handle { data: [{ id: ... }] } (OpenAI/Anthropic style)
-          let list: Array<{ id: string }> = []
-          const d = data as Record<string, unknown>
-          if (Array.isArray(d.data)) {
-            list = (d.data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          // Handle { models: [{ name: ... }] } (Ollama-style)
-          if (list.length === 0 && Array.isArray(d.models)) {
-            list = (d.models as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          // Handle direct array [{ id: ... }]
-          if (list.length === 0 && Array.isArray(data)) {
-            list = (data as Array<Record<string, unknown>>).map((m: Record<string, unknown>) => ({
-              id: String(m.id ?? m.name ?? ''),
-            })).filter(m => m.id)
-          }
-          if (list.length > 0) {
-            const sorted = list.sort((a, b) => a.id.localeCompare(b.id))
-            setModels(sorted)
-            saveGlobalConfig(current => ({
-              ...current,
-              anthropicCompatAvailableModels: sorted.map(m => m.id),
-            }))
-            setStep('model-select')
-          } else {
-            lastError = `${paths[idx]} → no models in response`
-            tryNext(idx + 1)
-          }
-        })
-        .catch((err: Error) => {
-          lastError = `${paths[idx]} → ${err.message}`
-          tryNext(idx + 1)
-        })
-    }
-
-    tryNext(0)
+    beginFetch()
+    void fetchModelsFromBaseUrl({
+      baseUrl: url,
+      apiKey: key,
+      paths: ['/models', '/v1/models'],
+      authStyle: 'x-api-key',
+      onSuccess: (sorted) => {
+        saveGlobalConfig(current => ({
+          ...current,
+          anthropicCompatAvailableModels: sorted,
+        }))
+        applyFetchedModels(sorted)
+      },
+      onError: applyFetchError,
+    })
   }
 
   if (step === 'base-url') {
@@ -1094,8 +999,8 @@ function AnthropicCompatApiKeySetup({
       )}
       <Text dimColor>Enter the model ID to use:</Text>
       <TextInput
-        value={model}
-        onChange={setModel}
+        value={manualModel}
+        onChange={setManualModel}
         cursorOffset={modelCursor}
         onChangeCursorOffset={setModelCursor}
         onSubmit={(value: string) => {
@@ -1187,13 +1092,12 @@ function ProviderPickerWrapper({
       }
 
       // Credentials exist, just switch
-      applyProvider(provider)
-      setAppState(prev => ({ ...prev, mainLoopModel: null }))
+      applyProvider(provider, setAppState)
       onDone(
         `Switched provider to ${chalk.bold(getProviderLabel(provider))}`,
       )
     },
-    [currentProvider, onDone],
+    [currentProvider, onDone, setAppState],
   )
 
   const handleBack = React.useCallback(() => {
@@ -1332,12 +1236,11 @@ function SetProviderAndClose({
       return
     }
 
-    applyProvider(match.value)
-    setAppState(prev => ({ ...prev, mainLoopModel: null }))
+    applyProvider(match.value, setAppState)
     onDone(
       `Switched provider to ${chalk.bold(getProviderLabel(match.value))}`,
     )
-  }, [args, currentProvider, onDone])
+  }, [args, currentProvider, onDone, setAppState])
 
   return null
 }

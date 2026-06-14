@@ -7,6 +7,7 @@
 
 import WebSocket from 'ws'
 import type { RemoteMessage, RemoteServerConfig, SessionCreateResponse } from './types.js'
+import { RemoteMessageSchema } from './schemas.js'
 
 export type RemoteClientEvents = {
   /** Remote web user sent a message */
@@ -33,6 +34,12 @@ export class RemoteClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private closed = false
   private pingInterval: ReturnType<typeof setInterval> | null = null
+  private reconnectAttempts = 0
+  /** Maximum delay between reconnect attempts (ms). 30s is a good balance
+   *  for localhost dev servers (which usually restart in seconds) without
+   *  hammering a server that is down for an extended period. */
+  private readonly RECONNECT_MAX_BACKOFF_MS = 30_000
+  private readonly RECONNECT_BASE_BACKOFF_MS = 1_000
 
   constructor(
     private config: RemoteServerConfig,
@@ -215,6 +222,9 @@ export class RemoteClient {
 
     this.ws.on('open', () => {
       this.events.onConnectionChange?.(true)
+      // Reset backoff after a successful connection — the next disconnect
+      // (which hopefully will not happen) should start fresh.
+      this.reconnectAttempts = 0
 
       // Ping every 30s to keep alive
       this.pingInterval = setInterval(() => {
@@ -224,9 +234,23 @@ export class RemoteClient {
 
     this.ws.on('message', (data) => {
       try {
-        const msg = JSON.parse(data.toString()) as RemoteMessage
-        this._handleMessage(msg)
-      } catch {}
+        const raw = JSON.parse(data.toString())
+        // Validate against the schema before dispatching into the local REPL
+        // pipeline. A malformed or hostile message is dropped silently rather
+        // than cast through 'as RemoteMessage' and forwarded to the input
+        // listener (which would feed it back to Claude as if the user typed it).
+        const parsed = RemoteMessageSchema.safeParse(raw)
+        if (!parsed.success) {
+          this.events.onError?.(new Error(
+            `Invalid WebSocket message: ${parsed.error.issues[0]?.message ?? 'unknown'}`,
+          ))
+          return
+        }
+        this._handleMessage(parsed.data as RemoteMessage)
+      } catch {
+        // Malformed JSON — ignore. The relay protocol is closed, so a stray
+        // non-JSON frame is almost certainly a bug somewhere upstream.
+      }
     })
 
     this.ws.on('close', () => {
@@ -237,9 +261,18 @@ export class RemoteClient {
 
       this.events.onConnectionChange?.(false)
 
-      // Auto-reconnect unless explicitly closed
+      // Auto-reconnect unless explicitly closed. Use exponential backoff
+      // with jitter so a long-down server does not get hammered (the previous
+      // 3s fixed delay fired 20 conn/min indefinitely).
       if (!this.closed) {
-        this.reconnectTimer = setTimeout(() => this._connectWs(), 3000)
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+        const exponential = this.RECONNECT_BASE_BACKOFF_MS * Math.pow(2, this.reconnectAttempts)
+        const capped = Math.min(exponential, this.RECONNECT_MAX_BACKOFF_MS)
+        // Full jitter: random value in [capped/2, capped]. This avoids
+        // a thundering herd if many clients reconnect at once.
+        const jittered = capped / 2 + Math.random() * (capped / 2)
+        this.reconnectAttempts++
+        this.reconnectTimer = setTimeout(() => this._connectWs(), jittered)
       }
     })
 

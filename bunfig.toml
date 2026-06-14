@@ -1,0 +1,5 @@
+[test]
+# Preload runs before each test file. Used to wire up mocks for
+# modules that depend on platform features (e.g. fs, env-paths)
+# so the unit tests can run in any working directory.
+preload = ["./src/test/setup.ts"]

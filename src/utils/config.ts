@@ -271,6 +271,19 @@ export type GlobalConfig = {
   anthropicCompatBaseUrl?: string
   anthropicCompatModel?: string
   anthropicCompatAvailableModels?: string[]
+
+  /**
+   * Self-hosted remote relay server URL (used by /remote-connect).
+   * Persisted so the user does not have to re-enter it on subsequent runs.
+   * @see src/commands/remote-connect/remote-connect.tsx
+   */
+  remoteServerUrl?: string
+  /**
+   * Self-hosted remote relay client key (the ck_* token issued by the server
+   * after pairing approval). Persisted alongside remoteServerUrl.
+   */
+  remoteClientKey?: string
+
   fallbackModel?: string // Model to fall back to when primary model is overloaded
   iterm2KeyBindingInstalled?: boolean // Legacy - keeping for backward compatibility
   editorMode?: EditorMode
@@ -1326,7 +1339,38 @@ function saveConfigWithLock<A extends object>(
 
       if (shouldCreateBackup) {
         const backupPath = join(backupDir, `${fileBase}.backup.${Date.now()}`)
-        fs.copyFileSync(file, backupPath)
+        // If the config contains secrets (primaryApiKey / codexOAuth OAuth
+        // tokens), strip them from the backup so a leaked backup file does
+        // not leak long-lived refresh tokens via Time Machine / cloud sync.
+        // The on-disk config keeps the secrets — only the backup is sanitised.
+        try {
+          const raw = fs.readFileSync(file, { encoding: 'utf-8' })
+          const parsed = jsonParse(stripBOM(raw)) as Record<string, unknown> | null
+          if (parsed && typeof parsed === 'object') {
+            let touched = false
+            if (parsed.primaryApiKey) {
+              delete parsed.primaryApiKey
+              touched = true
+            }
+            if (parsed.codexOAuth && typeof parsed.codexOAuth === 'object') {
+              delete parsed.codexOAuth
+              touched = true
+            }
+            if (touched) {
+              writeFileSyncAndFlush_DEPRECATED(backupPath, JSON.stringify(parsed, null, 2), {
+                encoding: 'utf-8',
+              })
+            } else {
+              fs.copyFileSync(file, backupPath)
+            }
+          } else {
+            fs.copyFileSync(file, backupPath)
+          }
+        } catch {
+          // If we cannot parse, fall back to a verbatim copy rather than
+          // skipping the backup entirely. The next save will retry sanitising.
+          fs.copyFileSync(file, backupPath)
+        }
       }
 
       // Clean up old backups, keeping only the 5 most recent
