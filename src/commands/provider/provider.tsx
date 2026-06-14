@@ -97,55 +97,69 @@ function getProviderLabel(provider: APIProvider): string {
   return PROVIDER_OPTIONS.find(o => o.value === provider)?.label ?? provider
 }
 
-function applyProvider(provider: APIProvider): void {
-  // Clear all provider env vars first
-  clearAllProviderEnvVars()
-
-  // Set the selected provider's env var
-  setProviderEnvVar(provider)
-
-  // Clear stale model from settings — the old provider's model won't work
-  // with the new provider. The new provider's default will be used instead.
-  updateSettingsForSource('userSettings', { model: undefined })
-
-  // Clear the in-memory model override so model resolution falls through
-  // to the new provider's default instead of reusing the old provider's model.
-  setMainLoopModelOverride(undefined)
-
-  // Persist the choice so it survives restarts
-  saveGlobalConfig((current) => ({
-    ...current,
-    apiProvider: provider,
-  }))
-}
-
 /**
  * Shared helper for saving provider config and syncing state across all layers.
- * Each caller only provides provider-specific config fields and a message.
+ *
+ * Two caller shapes are supported:
+ *  1. Pure provider switch (e.g. CLI flag, picker, OAuth completion):
+ *     pass only { provider, setAppState, message } — model and config are
+ *     cleared, no onChangeAPIKey / onDone callbacks fire.
+ *  2. Setup with credentials (api-key / base-url / model flows):
+ *     additionally pass configFields, modelId, onChangeAPIKey, onDone.
+ *
+ * The legacy `applyProvider(provider)` is now a thin alias for shape #1.
  */
 function applyProviderSwitch(params: {
   provider: APIProvider
-  configFields: Record<string, unknown>
-  modelId?: string
-  message: string
   setAppState: ReturnType<typeof useSetAppState>
-  onChangeAPIKey: () => void
-  onDone: (msg: string) => void
+  message: string
+  configFields?: Record<string, unknown>
+  modelId?: string
+  onChangeAPIKey?: () => void
+  onDone?: (msg: string) => void
 }): void {
-  const { provider, configFields, modelId, message, setAppState, onChangeAPIKey, onDone } = params
+  const {
+    provider,
+    configFields = {},
+    modelId,
+    message,
+    setAppState,
+    onChangeAPIKey,
+    onDone,
+  } = params
 
+  // 1. Persist provider choice + any per-provider config to ~/.freecc.json
   saveGlobalConfig(current => ({
     ...current,
     ...configFields,
     apiProvider: provider,
   }))
+
+  // 2. Sync env vars (clear all, set the active one)
   clearAllProviderEnvVars()
   setProviderEnvVar(provider)
+
+  // 3. Sync model across all three layers: bootstrap override, userSettings,
+  // and in-memory AppState. modelId undefined → cleared in all three.
   setMainLoopModelOverride(modelId || undefined)
   updateSettingsForSource('userSettings', { model: modelId || undefined })
   setAppState(prev => ({ ...prev, mainLoopModel: modelId ?? null }))
-  onChangeAPIKey()
-  onDone(message)
+
+  // 4. Optional side effects (used by setup flows)
+  onChangeAPIKey?.()
+  onDone?.(message)
+}
+
+/**
+ * Backwards-compatible alias for the "no config, no model" case.
+ * Used by callers that just want to switch provider and clear the
+ * previous model.
+ */
+function applyProvider(
+  provider: APIProvider,
+  setAppState: ReturnType<typeof useSetAppState>,
+): void {
+  applyProviderSwitch({ provider, setAppState, message: '' })
 }
 
 /**
@@ -214,11 +228,12 @@ function PlatformSetupInfo({
   onBack: () => void
 }): React.ReactNode {
   const info = PROVIDER_DOCS[provider]
+  const setAppState = useSetAppState()
 
   const handleSelect = React.useCallback(
     (value: string) => {
       if (value === 'switch') {
-        applyProvider(provider)
+        applyProvider(provider, setAppState)
         onDone(
           `Switched provider to ${chalk.bold(getProviderLabel(provider))}. Set the required environment variables, then restart Claude Code.`,
         )
@@ -276,13 +291,14 @@ function OAuthLoginFlow({
   onBack: () => void
   targetProvider?: APIProvider
 }): React.ReactNode {
+  const setAppState = useSetAppState()
   return (
     <Login
       onDone={(success: boolean) => {
         if (success) {
           context.onChangeAPIKey()
           if (targetProvider) {
-            applyProvider(targetProvider)
+            applyProvider(targetProvider, setAppState)
           }
           const label = targetProvider
             ? getProviderLabel(targetProvider)
@@ -794,8 +810,7 @@ function OpenAIOptionsMenu({
             { display: 'system' },
           )
         } else {
-          applyProvider('openai')
-          setAppState(prev => ({ ...prev, mainLoopModel: null }))
+          applyProvider('openai', setAppState)
           onDone(
             `Switched provider to ${chalk.bold(getProviderLabel('openai'))}`,
           )
@@ -1190,13 +1205,12 @@ function ProviderPickerWrapper({
       }
 
       // Credentials exist, just switch
-      applyProvider(provider)
-      setAppState(prev => ({ ...prev, mainLoopModel: null }))
+      applyProvider(provider, setAppState)
       onDone(
         `Switched provider to ${chalk.bold(getProviderLabel(provider))}`,
       )
     },
-    [currentProvider, onDone],
+    [currentProvider, onDone, setAppState],
   )
 
   const handleBack = React.useCallback(() => {
@@ -1335,12 +1349,11 @@ function SetProviderAndClose({
       return
     }
 
-    applyProvider(match.value)
-    setAppState(prev => ({ ...prev, mainLoopModel: null }))
+    applyProvider(match.value, setAppState)
     onDone(
       `Switched provider to ${chalk.bold(getProviderLabel(match.value))}`,
     )
-  }, [args, currentProvider, onDone])
+  }, [args, currentProvider, onDone, setAppState])
 
   return null
 }
