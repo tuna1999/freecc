@@ -6,20 +6,23 @@ import { useExitOnCtrlCDWithKeybindings } from '../hooks/useExitOnCtrlCDWithKeyb
 import { Box, Link, Newline, Text, useTheme } from '../ink.js';
 import { useKeybindings } from '../keybindings/useKeybinding.js';
 import { isAnthropicAuthEnabled } from '../utils/auth.js';
+import { getAPIProvider } from '../utils/model/providers.js';
 import { normalizeApiKeyForConfig } from '../utils/authPortable.js';
 import { getCustomApiKeyStatus } from '../utils/config.js';
+import { getGlobalConfig } from '../utils/config.js';
 import { env } from '../utils/env.js';
 import { isRunningOnHomespace } from '../utils/envUtils.js';
 import { PreflightStep } from '../utils/preflightChecks.js';
 import type { ThemeSetting } from '../utils/theme.js';
 import { ApproveApiKey } from './ApproveApiKey.js';
+import { OnboardingProviderStep } from '../commands/provider/OnboardingProviderStep.js';
 import { ConsoleOAuthFlow } from './ConsoleOAuthFlow.js';
 import { Select } from './CustomSelect/select.js';
 import { WelcomeV2 } from './LogoV2/WelcomeV2.js';
 import { PressEnterToContinue } from './PressEnterToContinue.js';
 import { ThemePicker } from './ThemePicker.js';
 import { OrderedList } from './ui/OrderedList.js';
-type StepId = 'preflight' | 'theme' | 'oauth' | 'api-key' | 'security' | 'terminal-setup';
+type StepId = 'preflight' | 'theme' | 'provider' | 'oauth' | 'api-key' | 'security' | 'terminal-setup';
 interface OnboardingStep {
   id: StepId;
   component: React.ReactNode;
@@ -94,6 +97,9 @@ export function Onboarding({
       <PressEnterToContinue />
     </Box>;
   const preflightStep = <PreflightStep onSuccess={goToNextStep} />;
+  const providerStep = <Box marginTop={1}>
+      <OnboardingProviderStep onAdvance={goToNextStep} />
+    </Box>;
   // Create the steps array - determine which steps to include based on reAuth and oauthEnabled
   const apiKeyNeedingApproval = useMemo(() => {
     // Add API key step if needed
@@ -107,6 +113,34 @@ export function Onboarding({
       return customApiKeyTruncated;
     }
   }, []);
+  const shouldOfferProviderStep = useMemo(() => {
+    // Offer the provider/model step only when NOTHING is configured yet:
+    // no ANTHROPIC_API_KEY (env) being used, and no custom provider config.
+    // Mirrors apiKeyNeedingApproval's homespace handling — there the env key
+    // is ignored, so the user still needs a provider to talk to.
+    const envKeyActive = !!process.env.ANTHROPIC_API_KEY && !isRunningOnHomespace();
+    if (envKeyActive) return false;
+    const cfg = getGlobalConfig();
+    const hasCustomProvider =
+      !!cfg.openaiApiKey ||
+      !!cfg.openaiBaseUrl ||
+      !!cfg.anthropicCompatApiKey ||
+      !!cfg.anthropicCompatBaseUrl ||
+      !!cfg.openrouterApiKey;
+    return !hasCustomProvider;
+  }, []);
+  // OAuth step is only useful for the first-party (Anthropic) login path.
+  // If the user picked a custom / 3P provider in the provider step (or
+  // already had one configured), skip OAuth — otherwise they'd see a login
+  // menu right after setting up a provider, which is confusing.
+  // Note: getAPIProvider() reflects process.env set by applyProviderSwitch
+  // (applyEnvVarPlan) synchronously during the provider step, so this reads
+  // the freshly-chosen provider, not just startup state.
+  // MUST be a plain (non-memo) call: the gate must re-evaluate on every
+  // render so the post-provider-step render (where env was just changed)
+  // sees the new provider and excludes the oauth step. useMemo would
+  // return the stale true because [oauthEnabled] hasn't changed.
+  const shouldOfferOAuthStep = oauthEnabled && getAPIProvider() === 'firstParty';
   function handleApiKeyDone(approved: boolean) {
     if (approved) {
       setSkipOAuth(true);
@@ -124,13 +158,19 @@ export function Onboarding({
     id: 'theme',
     component: themeStep
   });
+  if (shouldOfferProviderStep) {
+    steps.push({
+      id: 'provider',
+      component: providerStep
+    });
+  }
   if (apiKeyNeedingApproval) {
     steps.push({
       id: 'api-key',
       component: <ApproveApiKey customApiKeyTruncated={apiKeyNeedingApproval} onDone={handleApiKeyDone} />
     });
   }
-  if (oauthEnabled) {
+  if (shouldOfferOAuthStep) {
     steps.push({
       id: 'oauth',
       component: <SkippableStep skip={skipOAuth} onSkip={goToNextStep}>
