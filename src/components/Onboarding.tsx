@@ -6,6 +6,7 @@ import { useExitOnCtrlCDWithKeybindings } from '../hooks/useExitOnCtrlCDWithKeyb
 import { Box, Link, Newline, Text, useTheme } from '../ink.js';
 import { useKeybindings } from '../keybindings/useKeybinding.js';
 import { isAnthropicAuthEnabled } from '../utils/auth.js';
+import { getAPIProvider } from '../utils/model/providers.js';
 import { normalizeApiKeyForConfig } from '../utils/authPortable.js';
 import { getCustomApiKeyStatus } from '../utils/config.js';
 import { getGlobalConfig } from '../utils/config.js';
@@ -128,6 +129,17 @@ export function Onboarding({
       !!cfg.openrouterApiKey;
     return !hasCustomProvider;
   }, []);
+  // OAuth step is only useful for the first-party (Anthropic) login path.
+  // If the user picked a custom / 3P provider in the provider step (or
+  // already had one configured), skip OAuth — otherwise they'd see a login
+  // menu right after setting up a provider, which is confusing.
+  // Note: getAPIProvider() reflects process.env set by applyProviderSwitch
+  // (applyEnvVarPlan) synchronously during the provider step, so this reads
+  // the freshly-chosen provider, not just startup state.
+  const shouldOfferOAuthStep = useMemo(() => {
+    if (!oauthEnabled) return false;
+    return getAPIProvider() === 'firstParty';
+  }, [oauthEnabled]);
   function handleApiKeyDone(approved: boolean) {
     if (approved) {
       setSkipOAuth(true);
@@ -157,7 +169,7 @@ export function Onboarding({
       component: <ApproveApiKey customApiKeyTruncated={apiKeyNeedingApproval} onDone={handleApiKeyDone} />
     });
   }
-  if (oauthEnabled) {
+  if (shouldOfferOAuthStep) {
     steps.push({
       id: 'oauth',
       component: <SkippableStep skip={skipOAuth} onSkip={goToNextStep}>
