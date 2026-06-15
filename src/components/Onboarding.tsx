@@ -136,10 +136,11 @@ export function Onboarding({
   // Note: getAPIProvider() reflects process.env set by applyProviderSwitch
   // (applyEnvVarPlan) synchronously during the provider step, so this reads
   // the freshly-chosen provider, not just startup state.
-  const shouldOfferOAuthStep = useMemo(() => {
-    if (!oauthEnabled) return false;
-    return getAPIProvider() === 'firstParty';
-  }, [oauthEnabled]);
+  // MUST be a plain (non-memo) call: the gate must re-evaluate on every
+  // render so the post-provider-step render (where env was just changed)
+  // sees the new provider and excludes the oauth step. useMemo would
+  // return the stale true because [oauthEnabled] hasn't changed.
+  const shouldOfferOAuthStep = oauthEnabled && getAPIProvider() === 'firstParty';
   function handleApiKeyDone(approved: boolean) {
     if (approved) {
       setSkipOAuth(true);
