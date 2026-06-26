@@ -175,10 +175,14 @@ export { prefetchAwsCredentialsAndBedRockInfoIfSafe } from './authAws.js'
 // OAuth token storage / refresh
 export {
   _saveOAuthTokensIfNeeded as saveOAuthTokensIfNeeded,
+  _getClaudeAIOAuthTokens as getClaudeAIOAuthTokens,
   _clearOAuthTokenCache as clearOAuthTokenCache,
   _saveCodexOAuthTokens as saveCodexOAuthTokens,
+  _getCodexOAuthTokens as getCodexOAuthTokens,
   _clearCodexOAuthTokens as clearCodexOAuthTokens,
   _handleOAuth401Error as handleOAuth401Error,
+  _getClaudeAIOAuthTokensAsync as getClaudeAIOAuthTokensAsync,
+  _checkAndRefreshOAuthTokenIfNeeded as checkAndRefreshOAuthTokenIfNeeded,
 }
 
 // Auth token source detection
