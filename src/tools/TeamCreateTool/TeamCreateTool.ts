@@ -32,22 +32,10 @@ import {
 import { generateWordSlug } from '../../utils/words.js'
 import { TEAM_CREATE_TOOL_NAME } from './constants.js'
 import { getPrompt } from './prompt.js'
+import { inputSchema as _inputSchema, type Input, type InputSchema } from './types.js'
 import { renderToolUseMessage } from './UI.js'
 
-const inputSchema = lazySchema(() =>
-  z.strictObject({
-    team_name: z.string().describe('Name for the new team to create.'),
-    description: z.string().optional().describe('Team description/purpose.'),
-    agent_type: z
-      .string()
-      .optional()
-      .describe(
-        'Type/role of the team lead (e.g., "researcher", "test-runner"). ' +
-          'Used for team file and inter-agent coordination.',
-      ),
-  }),
-)
-type InputSchema = ReturnType<typeof inputSchema>
+const inputSchema = _inputSchema
 
 export type Output = {
   team_name: string
@@ -55,7 +43,7 @@ export type Output = {
   lead_agent_id: string
 }
 
-export type Input = z.infer<InputSchema>
+export type { Input }
 
 /**
  * Generates a unique team name by checking if the provided name already exists.

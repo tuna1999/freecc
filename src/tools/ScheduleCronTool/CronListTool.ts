@@ -12,27 +12,14 @@ import {
   isDurableCronEnabled,
   isKairosCronEnabled,
 } from './prompt.js'
+import { listOutputSchema, type ListOutput } from './types.js'
 import { renderListResultMessage, renderListToolUseMessage } from './UI.js'
 
 const inputSchema = lazySchema(() => z.strictObject({}))
 type InputSchema = ReturnType<typeof inputSchema>
 
-const outputSchema = lazySchema(() =>
-  z.object({
-    jobs: z.array(
-      z.object({
-        id: z.string(),
-        cron: z.string(),
-        humanSchedule: z.string(),
-        prompt: z.string(),
-        recurring: z.boolean().optional(),
-        durable: z.boolean().optional(),
-      }),
-    ),
-  }),
-)
+const outputSchema = lazySchema(() => listOutputSchema)
 type OutputSchema = ReturnType<typeof outputSchema>
-export type ListOutput = z.infer<OutputSchema>
 
 export const CronListTool = buildTool({
   name: CRON_LIST_TOOL_NAME,

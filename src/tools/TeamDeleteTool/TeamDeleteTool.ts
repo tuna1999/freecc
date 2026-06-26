@@ -1,10 +1,8 @@
-import { z } from 'zod/v4'
 import { logEvent } from '../../services/analytics/index.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/metadata.js'
 import type { Tool } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
-import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { TEAM_LEAD_NAME } from '../../utils/swarm/constants.js'
 import {
@@ -16,18 +14,8 @@ import { clearTeammateColors } from '../../utils/swarm/teammateLayoutManager.js'
 import { clearLeaderTeamName } from '../../utils/tasks.js'
 import { TEAM_DELETE_TOOL_NAME } from './constants.js'
 import { getPrompt } from './prompt.js'
+import { inputSchema, type Input, type InputSchema, type Output } from './types.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
-
-const inputSchema = lazySchema(() => z.strictObject({}))
-type InputSchema = ReturnType<typeof inputSchema>
-
-export type Output = {
-  success: boolean
-  message: string
-  team_name?: string
-}
-
-export type Input = z.infer<InputSchema>
 
 export const TeamDeleteTool: Tool<InputSchema, Output> = buildTool({
   name: TEAM_DELETE_TOOL_NAME,

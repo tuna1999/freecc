@@ -41,6 +41,13 @@ import {
 import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
+import type {
+  BroadcastOutput,
+  MessageOutput,
+  RequestOutput,
+  ResponseOutput,
+  SendMessageToolOutput,
+} from './types.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
 
 const StructuredMessage = lazySchema(() =>
@@ -89,46 +96,14 @@ type InputSchema = ReturnType<typeof inputSchema>
 
 export type Input = z.infer<InputSchema>
 
-export type MessageRouting = {
-  sender: string
-  senderColor?: string
-  target: string
-  targetColor?: string
-  summary?: string
-  content?: string
-}
-
-export type MessageOutput = {
-  success: boolean
-  message: string
-  routing?: MessageRouting
-}
-
-export type BroadcastOutput = {
-  success: boolean
-  message: string
-  recipients: string[]
-  routing?: MessageRouting
-}
-
-export type RequestOutput = {
-  success: boolean
-  message: string
-  request_id: string
-  target: string
-}
-
-export type ResponseOutput = {
-  success: boolean
-  message: string
-  request_id?: string
-}
-
-export type SendMessageToolOutput =
-  | MessageOutput
-  | BroadcastOutput
-  | RequestOutput
-  | ResponseOutput
+export type {
+  MessageRouting,
+  MessageOutput,
+  BroadcastOutput,
+  RequestOutput,
+  ResponseOutput,
+  SendMessageToolOutput,
+} from './types.js'
 
 function findTeammateColor(
   appState: {
