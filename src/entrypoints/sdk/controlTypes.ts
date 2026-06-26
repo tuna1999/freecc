@@ -45,6 +45,9 @@ export type SDKControlInitializeResponse = {
   subtype: 'initialize'
   request_id: string
   response: { [key: string]: any }
+  commands?: string[]
+  fast_mode_state?: string
+  [key: string]: any
 }
 
 /** Response to mcp_set_servers — see `src/cli/printMcp.ts` for usage. */
@@ -58,6 +61,9 @@ export type SDKControlMcpSetServersResponse = {
 export type SDKControlReloadPluginsResponse = {
   reloaded: string[]
   errors: Record<string, string>
+  plugins?: string[]
+  commands?: string[]
+  [key: string]: any
 }
 
 /** Bridge envelope for CLI ↔ host control traffic. */
@@ -80,7 +86,12 @@ export type ModelInfo = {
 
 /** MCP config that can be spawned by the CLI (stdin/stdout, SSE, HTTP). */
 export type McpServerConfigForProcessTransport = {
-  type: 'stdio' | 'sse' | 'http' | 'sdk' | 'ws'
+  type: string
+  name?: string
+  command?: string
+  args?: string[]
+  url?: string
+  env?: Record<string, string>
   [key: string]: any
 }
 
@@ -95,7 +106,11 @@ export type McpServerStatus = {
 
 /** Result of /rewind slash command. */
 export type RewindFilesResult = {
-  filesChanged: string[]
-  userModifiedFiles: string[]
+  filesChanged?: string[]
+  userModifiedFiles?: string[]
+  canRewind?: boolean
+  insertions?: number
+  deletions?: number
+  error?: string
   [key: string]: any
 }

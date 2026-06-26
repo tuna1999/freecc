@@ -20,4 +20,16 @@ export function getProactiveConfig(): unknown {
   return null
 }
 
+export function isProactivePaused(): boolean {
+  return false
+}
+
+export function activateProactive(_opts?: unknown): Promise<void> {
+  return Promise.resolve()
+}
+
+export function deactivateProactive(): Promise<void> {
+  return Promise.resolve()
+}
+
 export const PROACTIVE_API_VERSION = '0.0.0-stub'

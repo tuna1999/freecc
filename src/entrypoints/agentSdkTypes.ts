@@ -19,6 +19,10 @@ import type {
 export type {
   SDKControlRequest,
   SDKControlResponse,
+  ModelInfo,
+  McpServerConfigForProcessTransport,
+  McpServerStatus,
+  RewindFilesResult,
 } from './sdk/controlTypes.js'
 // Re-export core types (common serializable types)
 export * from './sdk/coreTypes.js'
