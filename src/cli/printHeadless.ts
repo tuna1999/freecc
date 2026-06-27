@@ -867,132 +867,6 @@ function runHeadlessStreaming(
    * behavior); if no hook responds, the request is forwarded to the SDK
    * consumer via the control protocol.
    */
-  function registerElicitationHandlers(clients: MCPServerConnection[]): void {
-    for (const connection of clients) {
-      if (
-        connection.type !== 'connected' ||
-        elicitationRegistered.has(connection.name)
-      ) {
-        continue
-      }
-      // Skip SDK MCP servers — elicitation flows through SdkControlClientTransport
-      if (connection.config.type === 'sdk') {
-        continue
-      }
-      const serverName = connection.name
-
-      // Wrapped in try/catch because setRequestHandler throws if the client wasn't
-      // created with elicitation capability declared (e.g., SDK-created clients).
-      try {
-        connection.client.setRequestHandler(
-          ElicitRequestSchema,
-          async (request, extra) => {
-            logMCPDebug(
-              serverName,
-              `Elicitation request received in print mode: ${jsonStringify(request)}`,
-            )
-
-            const mode = request.params.mode === 'url' ? 'url' : 'form'
-
-            logEvent('tengu_mcp_elicitation_shown', {
-              mode: mode as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-            })
-
-            // Run elicitation hooks first — they can provide a response programmatically
-            const hookResponse = await runElicitationHooks(
-              serverName,
-              request.params,
-              extra.signal,
-            )
-            if (hookResponse) {
-              logMCPDebug(
-                serverName,
-                `Elicitation resolved by hook: ${jsonStringify(hookResponse)}`,
-              )
-              logEvent('tengu_mcp_elicitation_response', {
-                mode: mode as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-                action:
-                  hookResponse.action as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-              })
-              return hookResponse
-            }
-
-            // Delegate to SDK consumer via control protocol
-            const url =
-              'url' in request.params
-                ? (request.params.url as string)
-                : undefined
-            const requestedSchema =
-              'requestedSchema' in request.params
-                ? (request.params.requestedSchema as
-                    | Record<string, unknown>
-                    | undefined)
-                : undefined
-
-            const elicitationId =
-              'elicitationId' in request.params
-                ? (request.params.elicitationId as string | undefined)
-                : undefined
-
-            const rawResult = await structuredIO.handleElicitation(
-              serverName,
-              request.params.message,
-              requestedSchema,
-              extra.signal,
-              mode,
-              url,
-              elicitationId,
-            )
-
-            const result = await runElicitationResultHooks(
-              serverName,
-              rawResult,
-              extra.signal,
-              mode,
-              elicitationId,
-            )
-
-            logEvent('tengu_mcp_elicitation_response', {
-              mode: mode as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-              action:
-                result.action as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-            })
-            return result
-          },
-        )
-
-        // Surface completion notifications to SDK consumers (URL mode)
-        connection.client.setNotificationHandler(
-          ElicitationCompleteNotificationSchema,
-          notification => {
-            const { elicitationId } = notification.params
-            logMCPDebug(
-              serverName,
-              `Elicitation completion notification: ${elicitationId}`,
-            )
-            void executeNotificationHooks({
-              message: `MCP server "${serverName}" confirmed elicitation ${elicitationId} complete`,
-              notificationType: 'elicitation_complete',
-            })
-            output.enqueue({
-              type: 'system',
-              subtype: 'elicitation_complete',
-              mcp_server_name: serverName,
-              elicitation_id: elicitationId,
-              uuid: randomUUID(),
-              session_id: getSessionId(),
-            })
-          },
-        )
-
-        elicitationRegistered.add(serverName)
-      } catch {
-        // setRequestHandler throws if the client wasn't created with
-        // elicitation capability — skip silently
-      }
-    }
-  }
-
   async function updateSdkMcp() {
     // Check if SDK MCP servers need to be updated (new servers added or removed)
     const currentServerNames = new Set(Object.keys(sdkMcpConfigs))
@@ -1506,7 +1380,7 @@ function runHeadlessStreaming(
             ...sdkClients,
             ...dynamicMcpState.clients,
           ]
-          registerElicitationHandlers(allMcpClients)
+          __registerElicitationHandlers(allMcpClients, elicitationRegistered)
           // Channel handlers for servers allowlisted via --channels at
           // construction time (or enableChannel() mid-session). Runs every
           // turn like registerElicitationHandlers — idempotent per-client
@@ -2707,7 +2581,7 @@ function runHeadlessStreaming(
               ],
             }
             if (result.client.type === 'connected') {
-              registerElicitationHandlers([result.client])
+              __registerElicitationHandlers([result.client], elicitationRegistered)
               reregisterChannelHandlerAfterReconnect(result.client)
               sendControlResponseSuccess(message)
             } else {
@@ -2798,7 +2672,7 @@ function runHeadlessStreaming(
               },
             }))
             if (result.client.type === 'connected') {
-              registerElicitationHandlers([result.client])
+              __registerElicitationHandlers([result.client], elicitationRegistered)
               reregisterChannelHandlerAfterReconnect(result.client)
               sendControlResponseSuccess(message)
             } else {
