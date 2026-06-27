@@ -826,33 +826,6 @@ function runHeadlessStreaming(
   })
   let activeUserSpecifiedModel = options.userSpecifiedModel
 
-  function injectModelSwitchBreadcrumbs(
-    modelArg: string,
-    resolvedModel: string,
-  ): void {
-    const breadcrumbs = createModelSwitchBreadcrumbs(
-      modelArg,
-      modelDisplayString(resolvedModel),
-    )
-    mutableMessages.push(...breadcrumbs)
-    for (const crumb of breadcrumbs) {
-      if (
-        typeof crumb.message.content === 'string' &&
-        crumb.message.content.includes(`<${LOCAL_COMMAND_STDOUT_TAG}>`)
-      ) {
-        output.enqueue({
-          type: 'user',
-          message: crumb.message,
-          session_id: getSessionId(),
-          parent_tool_use_id: null,
-          uuid: crumb.uuid,
-          timestamp: crumb.timestamp,
-          isReplay: true,
-        } satisfies SDKUserMessageReplay)
-      }
-    }
-  }
-
   // Cache SDK MCP clients to avoid reconnecting on each run
   let sdkClients: MCPServerConnection[] = []
   let sdkTools: Tools = []
@@ -986,7 +959,7 @@ function runHeadlessStreaming(
   let bridgeHandle: ReplBridgeHandle | null = null
   // Cursor into mutableMessages — tracks how far we've forwarded.
   // Same index-based diff as useReplBridge's lastWrittenIndexRef.
-  let bridgeLastForwardedIndex = 0
+  const bridgeLastForwardedIndex = { value: 0 }
 
   // Forward new messages from mutableMessages to the bridge.
   // Called incrementally during each turn (so claude.ai sees progress
@@ -995,21 +968,6 @@ function runHeadlessStreaming(
   // writeMessages has its own UUID-based dedup (initialMessageUUIDs,
   // recentPostedUUIDs) — the index cursor here is a pre-filter to avoid
   // O(n) re-scanning of already-sent messages on every call.
-  function forwardMessagesToBridge(): void {
-    if (!bridgeHandle) return
-    // Guard against mutableMessages shrinking (compaction truncates it).
-    const startIndex = Math.min(
-      bridgeLastForwardedIndex,
-      mutableMessages.length,
-    )
-    const newMessages = mutableMessages
-      .slice(startIndex)
-      .filter(m => m.type === 'user' || m.type === 'assistant')
-    bridgeLastForwardedIndex = mutableMessages.length
-    if (newMessages.length > 0) {
-      bridgeHandle.writeMessages(newMessages)
-    }
-  }
 
   // Helper to apply MCP server changes - used by both mcp_set_servers control message
   // and background plugin installation.
@@ -1600,7 +1558,7 @@ function runHeadlessStreaming(
               // Forward messages to bridge incrementally (mid-turn) so
               // claude.ai sees progress and the connection stays alive
               // while blocked on permission requests.
-              forwardMessagesToBridge()
+              __forwardMessagesToBridge(bridgeHandle, bridgeLastForwardedIndex, mutableMessages)
 
               if (message.type === 'result') {
                 // Flush pending SDK events so they appear before result on the stream.
@@ -1639,7 +1597,7 @@ function runHeadlessStreaming(
           }
 
           // Forward messages to bridge after each turn
-          forwardMessagesToBridge()
+          __forwardMessagesToBridge(bridgeHandle, bridgeLastForwardedIndex, mutableMessages)
           bridgeHandle?.sendResult()
 
           if (feature('FILE_PERSISTENCE') && turnStartTime !== undefined) {
@@ -2328,7 +2286,7 @@ function runHeadlessStreaming(
           activeUserSpecifiedModel = model
           setMainLoopModelOverride(model)
           notifySessionMetadataChanged({ model })
-          injectModelSwitchBreadcrumbs(requestedModel, model)
+          __injectModelSwitchBreadcrumbs(requestedModel, model, mutableMessages, output)
 
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'set_max_thinking_tokens') {
@@ -3138,7 +3096,7 @@ function runHeadlessStreaming(
             activeUserSpecifiedModel = newModel
             const modelArg = incoming.model ? String(incoming.model) : 'default'
             notifySessionMetadataChanged({ model: newModel })
-            injectModelSwitchBreadcrumbs(modelArg, newModel)
+            __injectModelSwitchBreadcrumbs(modelArg, newModel, mutableMessages, output)
           }
 
           sendControlResponseSuccess(message)
@@ -3371,7 +3329,7 @@ function runHeadlessStreaming(
                   )
                 } else {
                   bridgeHandle = handle
-                  bridgeLastForwardedIndex = mutableMessages.length
+                  bridgeLastForwardedIndex.value = mutableMessages.length
                   // Forward permission requests to the bridge
                   structuredIO.setOnControlRequestSent(request => {
                     handle.sendControlRequest(request)
