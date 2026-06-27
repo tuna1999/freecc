@@ -1214,98 +1214,6 @@ function runHeadlessStreaming(
     return mcpChangesPromise
   }
 
-  // Build McpServerStatus[] for control responses. Shared by mcp_status and
-  // reload_plugins handlers. Reads closure state: sdkClients, dynamicMcpState.
-  function buildMcpServerStatuses(): McpServerStatus[] {
-    const currentAppState = getAppState()
-    const currentMcpClients = currentAppState.mcp.clients
-    const allMcpTools = uniqBy(
-      [...currentAppState.mcp.tools, ...dynamicMcpState.tools],
-      'name',
-    )
-    const existingNames = new Set([
-      ...currentMcpClients.map(c => c.name),
-      ...sdkClients.map(c => c.name),
-    ])
-    return [
-      ...currentMcpClients,
-      ...sdkClients,
-      ...dynamicMcpState.clients.filter(c => !existingNames.has(c.name)),
-    ].map(connection => {
-      let config
-      if (
-        connection.config.type === 'sse' ||
-        connection.config.type === 'http'
-      ) {
-        config = {
-          type: connection.config.type,
-          url: connection.config.url,
-          headers: connection.config.headers,
-          oauth: connection.config.oauth,
-        }
-      } else if (connection.config.type === 'claudeai-proxy') {
-        config = {
-          type: 'claudeai-proxy' as const,
-          url: connection.config.url,
-          id: connection.config.id,
-        }
-      } else if (
-        connection.config.type === 'stdio' ||
-        connection.config.type === undefined
-      ) {
-        config = {
-          type: 'stdio' as const,
-          command: connection.config.command,
-          args: connection.config.args,
-        }
-      }
-      const serverTools =
-        connection.type === 'connected'
-          ? filterToolsByServer(allMcpTools, connection.name).map(tool => ({
-              name: tool.mcpInfo?.toolName ?? tool.name,
-              annotations: {
-                readOnly: tool.isReadOnly({}) || undefined,
-                destructive: tool.isDestructive?.({}) || undefined,
-                openWorld: tool.isOpenWorld?.({}) || undefined,
-              },
-            }))
-          : undefined
-      // Capabilities passthrough with allowlist pre-filter. The IDE reads
-      // experimental['claude/channel'] to decide whether to show the
-      // Enable-channel prompt — only echo it if channel_enable would
-      // actually pass the allowlist. Not a security boundary (the
-      // handler re-runs the full gate); just avoids dead buttons.
-      let capabilities: { experimental?: Record<string, unknown> } | undefined
-      if (
-        (feature('KAIROS') || feature('KAIROS_CHANNELS')) &&
-        connection.type === 'connected' &&
-        connection.capabilities.experimental
-      ) {
-        const exp = { ...connection.capabilities.experimental }
-        if (
-          exp['claude/channel'] &&
-          (!isChannelsEnabled() ||
-            !isChannelAllowlisted(connection.config.pluginSource))
-        ) {
-          delete exp['claude/channel']
-        }
-        if (Object.keys(exp).length > 0) {
-          capabilities = { experimental: exp }
-        }
-      }
-      return {
-        name: connection.name,
-        status: connection.type,
-        serverInfo:
-          connection.type === 'connected' ? connection.serverInfo : undefined,
-        error: connection.type === 'failed' ? connection.error : undefined,
-        config,
-        scope: connection.config.scope,
-        tools: serverTools,
-        capabilities,
-      }
-    })
-  }
 
   // NOTE: Nested function required - needs closure access to applyMcpServerChanges and updateSdkMcp
   async function installPluginsAndApplyMcpInBackground(): Promise<void> {
@@ -2563,7 +2471,7 @@ function runHeadlessStreaming(
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'mcp_status') {
           sendControlResponseSuccess(message, {
-            mcpServers: buildMcpServerStatuses(),
+            mcpServers: __buildMcpServerStatuses(getAppState, dynamicMcpState, sdkClients),
           })
         } else if (message.request.subtype === 'get_context_usage') {
           try {
@@ -2731,7 +2639,7 @@ function runHeadlessStreaming(
                 model: a.model === 'inherit' ? undefined : a.model,
               })),
               plugins,
-              mcpServers: buildMcpServerStatuses(),
+              mcpServers: __buildMcpServerStatuses(getAppState, dynamicMcpState, sdkClients),
               error_count: r.error_count,
             } satisfies SDKControlReloadPluginsResponse)
           } catch (error) {
