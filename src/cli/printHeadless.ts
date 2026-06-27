@@ -48,6 +48,16 @@ const extractMemoriesModule = feature('EXTRACT_MEMORIES')
   ? (require('../services/extractMemories/extractMemories.js') as typeof import('../services/extractMemories/extractMemories.js'))
   : null
 import { runHeadlessStreaming } from './print.js'
+import {
+  buildMcpServerStatuses as _buildMcpServerStatuses,
+  registerElicitationHandlers as _registerElicitationHandlers,
+  updateSdkMcp as _updateSdkMcp,
+  type McpRuntime,
+} from './printStreamingMcp.js'
+import {
+  forwardMessagesToBridge as _forwardMessagesToBridge,
+  injectModelSwitchBreadcrumbs as _injectModelSwitchBreadcrumbs,
+} from './printStreamingCore.js'
 import { getMcpTools } from '../utils/mcp.js'
 import { selectToolsForAgent } from '../utils/tools.js'
 import { installPluginsAndApplyMcpInBackground } from '../utils/plugins/installPlugins.js'
@@ -840,79 +850,8 @@ function runHeadlessStreaming(
    * behavior); if no hook responds, the request is forwarded to the SDK
    * consumer via the control protocol.
    */
-  async function updateSdkMcp() {
-    // Check if SDK MCP servers need to be updated (new servers added or removed)
-    const currentServerNames = new Set(Object.keys(sdkMcpConfigs))
-    const connectedServerNames = new Set(sdkClients.map(c => c.name))
 
-    // Check if there are any differences (additions or removals)
-    const hasNewServers = Array.from(currentServerNames).some(
-      name => !connectedServerNames.has(name),
-    )
-    const hasRemovedServers = Array.from(connectedServerNames).some(
-      name => !currentServerNames.has(name),
-    )
-    // Check if any SDK clients are pending and need to be upgraded
-    const hasPendingSdkClients = sdkClients.some(c => c.type === 'pending')
-    // Check if any SDK clients failed their handshake and need to be retried.
-    // Without this, a client that lands in 'failed' (e.g. handshake timeout on
-    // a WS reconnect race) stays failed forever — its name satisfies the
-    // connectedServerNames diff but it contributes zero tools.
-    const hasFailedSdkClients = sdkClients.some(c => c.type === 'failed')
-
-    const haveServersChanged =
-      hasNewServers ||
-      hasRemovedServers ||
-      hasPendingSdkClients ||
-      hasFailedSdkClients
-
-    if (haveServersChanged) {
-      // Clean up removed servers
-      for (const client of sdkClients) {
-        if (!currentServerNames.has(client.name)) {
-          if (client.type === 'connected') {
-            await client.cleanup()
-          }
-        }
-      }
-
-      // Re-initialize all SDK MCP servers with current config
-      const sdkSetup = await setupSdkMcpClients(
-        sdkMcpConfigs,
-        (serverName, message) =>
-          structuredIO.sendMcpMessage(serverName, message),
-      )
-      sdkClients = sdkSetup.clients
-      sdkTools = sdkSetup.tools
-
-      // Store SDK MCP tools in appState so subagents can access them via
-      // assembleToolPool. Only tools are stored here — SDK clients are already
-      // merged separately in the query loop (allMcpClients) and mcp_status handler.
-      // Use both old (connectedServerNames) and new (currentServerNames) to remove
-      // stale SDK tools when servers are added or removed.
-      const allSdkNames = uniq([...connectedServerNames, ...currentServerNames])
-      setAppState(prev => ({
-        ...prev,
-        mcp: {
-          ...prev.mcp,
-          tools: [
-            ...prev.mcp.tools.filter(
-              t =>
-                !allSdkNames.some(name =>
-                  t.name.startsWith(getMcpPrefix(name)),
-                ),
-            ),
-            ...sdkTools,
-          ],
-        },
-      }))
-
-      // Set up the special internal VSCode MCP server if necessary.
-      setupVscodeSdkMcp(sdkClients)
-    }
-  }
-
-  void updateSdkMcp()
+  void __updateSdkMcp(mcpRuntime)
 
   // State for dynamically added MCP servers (via mcp_set_servers control message)
   // These are separate from SDK MCP servers and support all transport types
@@ -983,6 +922,26 @@ function runHeadlessStreaming(
     },
     sdkServersChanged: false,
   })
+
+  // Bundle of MCP runtime state for streaming helpers. Getters read live
+  // closure bindings; setters let the helpers mutate them across the
+  // function boundary (JS doesn't allow `let` rebinding across closures).
+  const mcpRuntime: McpRuntime = {
+    getSDKConfigs: () => sdkMcpConfigs,
+    getDynamicState: () => dynamicMcpState,
+    getSdkClients: () => sdkClients,
+    getSdkTools: () => sdkTools,
+    setAppState,
+    setSdkClients: (clients: MCPServerConnection[]) => {
+      sdkClients = clients
+    },
+    setSdkTools: (tools: Tools) => {
+      sdkTools = tools
+    },
+    setDynamicState: (state: DynamicMcpState) => {
+      dynamicMcpState = state
+    },
+  }
 
   function applyMcpServerChanges(
     servers: Record<string, McpServerConfigForProcessTransport>,
@@ -1160,7 +1119,7 @@ function runHeadlessStreaming(
     const { response, sdkServersChanged } =
       await applyMcpServerChanges(supportedConfigs)
     if (sdkServersChanged) {
-      void updateSdkMcp()
+      void __updateSdkMcp(mcpRuntime)
     }
     logForDebugging(
       `Headless MCP refresh: added=${response.added.length}, removed=${response.removed.length}`,
@@ -1222,7 +1181,7 @@ function runHeadlessStreaming(
     headlessProfilerCheckpoint('run_entry')
     // TODO(custom-tool-refactor): Should move to the init message, like browser
 
-    await updateSdkMcp()
+    await __updateSdkMcp(mcpRuntime)
     headlessProfilerCheckpoint('after_updateSdkMcp')
 
     // Resolve deferred plugin installation (CLAUDE_CODE_SYNC_PLUGIN_INSTALL).
@@ -2407,7 +2366,7 @@ function runHeadlessStreaming(
 
           // Connect SDK servers AFTER response to avoid deadlock
           if (sdkServersChanged) {
-            void updateSdkMcp()
+            void __updateSdkMcp(mcpRuntime)
           }
         } else if (message.request.subtype === 'reload_plugins') {
           try {

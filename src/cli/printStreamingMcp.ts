@@ -251,3 +251,120 @@ export function registerElicitationHandlers(
     }
   }
 
+
+/**
+ * Bundle of closure state shared between updateSdkMcp and
+ * applyMcpServerChanges. Both functions read or mutate the same
+ * SDK/dynamic MCP fields plus AppState, so passing them in one
+ * object keeps the call sites readable.
+ */
+export interface McpRuntime {
+  getSDKConfigs: () => Record<string, McpSdkServerConfig>
+  getDynamicState: () => DynamicMcpState
+  getSdkClients: () => MCPServerConnection[]
+  getSdkTools: () => Tools
+  setAppState: (f: (prev: AppState) => AppState) => void
+  /** Mutators — the runtime owns the actual let bindings. */
+  setSdkClients: (clients: MCPServerConnection[]) => void
+  setSdkTools: (tools: Tools) => void
+  setDynamicState: (state: DynamicMcpState) => void
+}
+
+export async function updateSdkMcp(runtime: McpRuntime): Promise<void> {
+  // Re-read live state each call so the function reflects changes
+  // made by applyMcpServerChanges between invocations.
+  const sdkMcpConfigs = runtime.getSDKConfigs()
+  const sdkClients = runtime.getSdkClients()
+  const sdkTools = runtime.getSdkTools()
+  const dynamicMcpState = runtime.getDynamicState()
+
+  // Check if SDK MCP servers need to be updated (new servers added or removed)
+  const currentServerNames = new Set(Object.keys(sdkMcpConfigs))
+  const connectedServerNames = new Set(sdkClients.map(c => c.name))
+
+  // Check if there are any differences (additions or removals)
+  const hasNewServers = Array.from(currentServerNames).some(
+    name => !connectedServerNames.has(name),
+  )
+  const hasRemovedServers = Array.from(connectedServerNames).some(
+    name => !currentServerNames.has(name),
+  )
+  // Check if any SDK clients are pending and need to be upgraded
+  const hasPendingSdkClients = sdkClients.some(c => c.type === 'pending')
+  // Check if any SDK clients failed their handshake and need to be retried.
+  const hasFailedSdkClients = sdkClients.some(c => c.type === 'failed')
+
+  if (
+    !hasNewServers &&
+    !hasRemovedServers &&
+    !hasPendingSdkClients &&
+    !hasFailedSdkClients
+  ) {
+    return
+  }
+
+  // Build the set of all SDK server names (current + new) for tool filtering.
+  // Used when removing stale tool entries from appState.
+  const allSdkNames = new Set([
+    ...currentServerNames,
+    ...connectedServerNames,
+  ])
+
+  // Compute the previous SDK client names BEFORE setupSdkMcpClients runs,
+  // so we know which clients to clean up if their configs disappear.
+  const previousSdkClients = sdkClients
+  const previousSdkClientNames = new Set(previousSdkClients.map(c => c.name))
+
+  try {
+    // Re-initialize all SDK MCP servers with current config
+    const sdkSetup = await setupSdkMcpClients(
+      sdkMcpConfigs,
+      (serverName, message) => structuredIO.sendMcpMessage(serverName, message),
+    )
+    runtime.setSdkClients(sdkSetup.clients)
+    runtime.setSdkTools(sdkSetup.tools)
+
+    // Store SDK MCP tools in appState so subagents can access them via
+    // assembleToolPool. Only tools are stored here — SDK clients are already
+    // tracked via sdkMcpConfigs closure.
+    runtime.setAppState(prev => {
+      // Tools that were registered in a previous SDK MCP setup but are no
+      // longer in the current config need to be removed from appState.
+      const toolsToRemove = new Set<string>()
+      for (const prevName of previousSdkClientNames) {
+        if (!allSdkNames.has(prevName)) {
+          // Mark all tools that were registered under this server prefix.
+          const prefix = getMcpPrefix(prevName)
+          for (const tool of prev.mcp.tools) {
+            if (tool.name.startsWith(prefix)) {
+              toolsToRemove.add(tool.name)
+            }
+          }
+        }
+      }
+
+      // Keep all non-SDK tools plus the freshly-built SDK tools.
+      const filtered = prev.mcp.tools.filter(t => !toolsToRemove.has(t.name))
+
+      return {
+        ...prev,
+        mcp: {
+          ...prev.mcp,
+          tools: [...filtered, ...sdkSetup.tools],
+        },
+      }
+    })
+
+    // Tear down the per-client resources for any clients that were
+    // dropped (server removed) OR whose config changed (config update).
+    // We can't easily tell the two apart from the previous snapshot
+    // alone, so we close any client whose name is no longer present.
+    for (const client of previousSdkClients) {
+      if (!allSdkNames.has(client.name) && client.type === 'connected') {
+        await client.cleanup()
+      }
+    }
+  } catch (e) {
+    logError(e)
+  }
+}
