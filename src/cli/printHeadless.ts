@@ -909,20 +909,6 @@ function runHeadlessStreaming(
   // O(n) re-scanning of already-sent messages on every call.
 
   // Helper to apply MCP server changes - used by both mcp_set_servers control message
-  // and background plugin installation.
-  // NOTE: Nested function required - mutates closure state (sdkMcpConfigs, sdkClients, etc.)
-  let mcpChangesPromise: Promise<{
-    response: SDKControlMcpSetServersResponse
-    sdkServersChanged: boolean
-  }> = Promise.resolve({
-    response: {
-      added: [] as string[],
-      removed: [] as string[],
-      errors: {} as Record<string, string>,
-    },
-    sdkServersChanged: false,
-  })
-
   // Bundle of MCP runtime state for streaming helpers. Getters read live
   // closure bindings; setters let the helpers mutate them across the
   // function boundary (JS doesn't allow `let` rebinding across closures).
@@ -943,67 +929,6 @@ function runHeadlessStreaming(
     },
   }
 
-  function applyMcpServerChanges(
-    servers: Record<string, McpServerConfigForProcessTransport>,
-  ): Promise<{
-    response: SDKControlMcpSetServersResponse
-    sdkServersChanged: boolean
-  }> {
-    // Serialize calls to prevent race conditions between concurrent callers
-    // (background plugin install and mcp_set_servers control messages)
-    const doWork = async (): Promise<{
-      response: SDKControlMcpSetServersResponse
-      sdkServersChanged: boolean
-    }> => {
-      const oldSdkClientNames = new Set(sdkClients.map(c => c.name))
-
-      const result = await __handleMcpSetServers(
-        servers,
-        { configs: sdkMcpConfigs, clients: sdkClients, tools: sdkTools },
-        dynamicMcpState,
-        setAppState,
-      )
-
-      // Update SDK state (need to mutate sdkMcpConfigs since it's shared)
-      for (const key of Object.keys(sdkMcpConfigs)) {
-        delete sdkMcpConfigs[key]
-      }
-      Object.assign(sdkMcpConfigs, result.newSdkState.configs)
-      sdkClients = result.newSdkState.clients
-      sdkTools = result.newSdkState.tools
-      dynamicMcpState = result.newDynamicState
-
-      // Keep appState.mcp.tools in sync so subagents can see SDK MCP tools.
-      // Use both old and new SDK client names to remove stale tools.
-      if (result.sdkServersChanged) {
-        const newSdkClientNames = new Set(sdkClients.map(c => c.name))
-        const allSdkNames = uniq([...oldSdkClientNames, ...newSdkClientNames])
-        setAppState(prev => ({
-          ...prev,
-          mcp: {
-            ...prev.mcp,
-            tools: [
-              ...prev.mcp.tools.filter(
-                t =>
-                  !allSdkNames.some(name =>
-                    t.name.startsWith(getMcpPrefix(name)),
-                  ),
-              ),
-              ...sdkTools,
-            ],
-          },
-        }))
-      }
-
-      return {
-        response: result.response,
-        sdkServersChanged: result.sdkServersChanged,
-      }
-    }
-
-    mcpChangesPromise = mcpChangesPromise.then(doWork, doWork)
-    return mcpChangesPromise
-  }
 
 
   // NOTE: Nested function required - needs closure access to applyMcpServerChanges and updateSdkMcp
@@ -1117,7 +1042,7 @@ function runHeadlessStreaming(
       }
     }
     const { response, sdkServersChanged } =
-      await applyMcpServerChanges(supportedConfigs)
+      await __applyMcpServerChanges(supportedConfigs, mcpRuntime)
     if (sdkServersChanged) {
       void __updateSdkMcp(mcpRuntime)
     }
@@ -2359,7 +2284,7 @@ function runHeadlessStreaming(
           }
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'mcp_set_servers') {
-          const { response, sdkServersChanged } = await applyMcpServerChanges(
+          const { response, sdkServersChanged } = await __applyMcpServerChanges(
             message.request.servers,
           )
           sendControlResponseSuccess(message, response)

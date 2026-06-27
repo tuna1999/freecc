@@ -368,3 +368,84 @@ export async function updateSdkMcp(runtime: McpRuntime): Promise<void> {
     logError(e)
   }
 }
+
+/**
+ * Serialize calls to applyMcpServerChanges so concurrent callers
+ * (background plugin install and mcp_set_servers control messages)
+ * don't race on the same SDK MCP state.
+ *
+ * The promise chain lives at module scope here so it persists across
+ * calls but doesn't leak to printHeadless's closure.
+ */
+let mcpChangesPromise: Promise<{
+  response: SDKControlMcpSetServersResponse
+  sdkServersChanged: boolean
+}> = Promise.resolve({
+  response: { added: [], removed: [], errors: {} },
+  sdkServersChanged: false,
+})
+
+export async function applyMcpServerChanges(
+  servers: Record<string, McpServerConfigForProcessTransport>,
+  runtime: McpRuntime,
+): Promise<{
+  response: SDKControlMcpSetServersResponse
+  sdkServersChanged: boolean
+}> {
+  const doWork = async (): Promise<{
+    response: SDKControlMcpSetServersResponse
+    sdkServersChanged: boolean
+  }> => {
+    const sdkMcpConfigs = runtime.getSDKConfigs()
+    const sdkClients = runtime.getSdkClients()
+    const dynamicMcpState = runtime.getDynamicState()
+
+    const oldSdkClientNames = new Set(sdkClients.map(c => c.name))
+
+    const result = await __handleMcpSetServers(
+      servers,
+      { configs: sdkMcpConfigs, clients: sdkClients, tools: runtime.getSdkTools() },
+      dynamicMcpState,
+      runtime.setAppState,
+    )
+
+    // Update SDK state (need to mutate sdkMcpConfigs since it's shared)
+    for (const key of Object.keys(sdkMcpConfigs)) {
+      delete sdkMcpConfigs[key]
+    }
+    Object.assign(sdkMcpConfigs, result.newSdkState.configs)
+    runtime.setSdkClients(result.newSdkState.clients)
+    runtime.setSdkTools(result.newSdkState.tools)
+    runtime.setDynamicState(result.newDynamicState)
+
+    // Keep appState.mcp.tools in sync so subagents can see SDK MCP tools.
+    // Use both old and new SDK client names to remove stale tools.
+    if (result.sdkServersChanged) {
+      const newSdkClientNames = new Set(result.newSdkState.clients.map(c => c.name))
+      const allSdkNames = uniq([...oldSdkClientNames, ...newSdkClientNames])
+      runtime.setAppState(prev => ({
+        ...prev,
+        mcp: {
+          ...prev.mcp,
+          tools: [
+            ...prev.mcp.tools.filter(
+              t =>
+                !allSdkNames.some(name =>
+                  t.name.startsWith(getMcpPrefix(name)),
+                ),
+            ),
+            ...result.newSdkState.tools,
+          ],
+        },
+      }))
+    }
+
+    return {
+      response: result.response,
+      sdkServersChanged: result.sdkServersChanged,
+    }
+  }
+
+  mcpChangesPromise = mcpChangesPromise.then(doWork, doWork)
+  return mcpChangesPromise
+}
