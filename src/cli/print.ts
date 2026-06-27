@@ -82,11 +82,14 @@ import {
 import {
   handleOrphanedPermissionResponse as _handleOrphanedPermissionResponse,
 } from './printPermission.js'
-
-// Internal aliases used by runHeadlessStreaming() below. Re-exported under
-// their public names at the bottom of this file for backward compatibility.
-const __handleMcpSetServers = _handleMcpSetServers
-const __handleOrphanedPermissionResponse = _handleOrphanedPermissionResponse
+import {
+  trackReceivedMessageUuid as _trackReceivedMessageUuid,
+  type PromptValue as _PromptValue,
+  toBlocks as _toBlocks,
+  joinPromptValues as _joinPromptValues,
+  canBatchWith as _canBatchWith,
+  removeInterruptedMessage as _removeInterruptedMessage,
+} from './printHelpers.js'
 import {
   ChannelMessageNotificationSchema,
   gateChannelServer,
@@ -402,67 +405,6 @@ The user cannot receive your response until the team is completely shut down.
 
 Shut down your team and prepare your final response for the user.`
 
-// Track message UUIDs received during the current session runtime
-const MAX_RECEIVED_UUIDS = 10_000
-const receivedMessageUuids = new Set<UUID>()
-const receivedMessageUuidsOrder: UUID[] = []
-
-function trackReceivedMessageUuid(uuid: UUID): boolean {
-  if (receivedMessageUuids.has(uuid)) {
-    return false // duplicate
-  }
-  receivedMessageUuids.add(uuid)
-  receivedMessageUuidsOrder.push(uuid)
-  // Evict oldest entries when at capacity
-  if (receivedMessageUuidsOrder.length > MAX_RECEIVED_UUIDS) {
-    const toEvict = receivedMessageUuidsOrder.splice(
-      0,
-      receivedMessageUuidsOrder.length - MAX_RECEIVED_UUIDS,
-    )
-    for (const old of toEvict) {
-      receivedMessageUuids.delete(old)
-    }
-  }
-  return true // new UUID
-}
-
-type PromptValue = string | ContentBlockParam[]
-
-function toBlocks(v: PromptValue): ContentBlockParam[] {
-  return typeof v === 'string' ? [{ type: 'text', text: v }] : v
-}
-
-/**
- * Join prompt values from multiple queued commands into one. Strings are
- * newline-joined; if any value is a block array, all values are normalized
- * to blocks and concatenated.
- */
-export function joinPromptValues(values: PromptValue[]): PromptValue {
-  if (values.length === 1) return values[0]!
-  if (values.every(v => typeof v === 'string')) {
-    return values.join('\n')
-  }
-  return values.flatMap(toBlocks)
-}
-
-/**
- * Whether `next` can be batched into the same ask() call as `head`. Only
- * prompt-mode commands batch, and only when the workload tag matches (so the
- * combined turn is attributed correctly) and the isMeta flag matches (so a
- * proactive tick can't merge into a user prompt and lose its hidden-in-
- * transcript marking when the head is spread over the merged command).
- */
-export function canBatchWith(
-  head: QueuedCommand,
-  next: QueuedCommand | undefined,
-): boolean {
-  return (
-    next !== undefined &&
-    next.mode === 'prompt' &&
-    next.workload === head.workload &&
-    next.isMeta === head.isMeta
-  )
-}
 
 export async function runHeadless(
   inputPrompt: string | AsyncIterable<string>,
@@ -1195,7 +1137,7 @@ function runHeadlessStreaming(
     // the model sees it exactly once. For mid-turn interruptions, the
     // deserialization layer transforms them into interrupted_prompt by
     // appending a synthetic "Continue from where you left off." message.
-    removeInterruptedMessage(mutableMessages, turnInterruptionState.message)
+    __removeInterruptedMessage(mutableMessages, turnInterruptionState.message)
     enqueue({
       mode: 'prompt',
       value: turnInterruptionState.message.message.content,
@@ -1960,13 +1902,13 @@ function runHeadlessStreaming(
           // Prompt commands greedily collect followers with matching workload.
           const batch: QueuedCommand[] = [command]
           if (command.mode === 'prompt') {
-            while (canBatchWith(command, peek(isMainThread))) {
+            while (__canBatchWith(command, peek(isMainThread))) {
               batch.push(dequeue(isMainThread)!)
             }
             if (batch.length > 1) {
               command = {
                 ...command,
-                value: joinPromptValues(batch.map(c => c.value)),
+                value: __joinPromptValues(batch.map(c => c.value)),
                 uuid: batch.findLast(c => c.uuid)?.uuid ?? command.uuid,
               }
             }
@@ -4108,7 +4050,7 @@ function runHeadlessStreaming(
         }
 
         // Track this UUID to prevent runtime duplicates
-        trackReceivedMessageUuid(message.uuid)
+        __trackReceivedMessageUuid(message.uuid)
       }
 
       enqueue({
@@ -4698,17 +4640,6 @@ function emitLoadError(
  *
  * @internal Exported for testing
  */
-export function removeInterruptedMessage(
-  messages: Message[],
-  interruptedUserMessage: NormalizedUserMessage,
-): void {
-  const idx = messages.findIndex(m => m.uuid === interruptedUserMessage.uuid)
-  if (idx !== -1) {
-    // Remove the user message and the sentinel that immediately follows it.
-    // splice safely handles the case where idx is the last element.
-    messages.splice(idx, 2)
-  }
-}
 
 
 /**
@@ -4742,4 +4673,11 @@ export {
   getCanUseToolFn,
   handleOrphanedPermissionResponse,
 } from './printPermission.js'
+
+/**
+ * Print-mode utility helpers extracted to `./printHelpers.ts`.
+ * Re-exported below for backward compatibility.
+ */
+export { joinPromptValues, canBatchWith, removeInterruptedMessage } from './printHelpers.js'
+export type { PromptValue } from './printHelpers.js'
 
