@@ -34,7 +34,9 @@ type LoadInitialMessagesResult = {
   agentSetting?: string
 }
 
-async function loadInitialMessages(
+export type { LoadInitialMessagesResult }
+
+export async function loadInitialMessages(
   setAppState: (f: (prev: AppState) => AppState) => void,
   options: {
     continue: boolean | undefined
@@ -340,7 +342,7 @@ async function loadInitialMessages(
   }
 }
 
-function getStructuredIO(
+export function getStructuredIO(
   inputPrompt: string | AsyncIterable<string>,
   options: {
     sdkUrl: string | undefined
