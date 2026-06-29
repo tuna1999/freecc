@@ -252,7 +252,7 @@ export function isUsing3PServices(): boolean {
 /**
  * Get the configured otelHeadersHelper from settings
  */
-function getConfiguredOtelHeadersHelper(): string | undefined {
+export function getConfiguredOtelHeadersHelper(): string | undefined {
   const mergedSettings = getSettings_DEPRECATED() || {}
   return mergedSettings.otelHeadersHelper
 }
@@ -347,7 +347,7 @@ export function getOtelHeadersFromHelper(): Record<string, string> {
   }
 }
 
-function isConsumerPlan(plan: SubscriptionType): plan is 'max' | 'pro' {
+export function isConsumerPlan(plan: SubscriptionType): plan is 'max' | 'pro' {
   return plan === 'max' || plan === 'pro'
 }
 

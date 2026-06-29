@@ -39,7 +39,7 @@ export function hasToolCallsInLastAssistantTurn(messages: Message[]): boolean {
   return false
 }
 
-function hoistToolResults(content: ContentBlockParam[]): ContentBlockParam[] {
+export function hoistToolResults(content: ContentBlockParam[]): ContentBlockParam[] {
   const toolResults: ContentBlockParam[] = []
   const otherBlocks: ContentBlockParam[] = []
 
@@ -54,7 +54,7 @@ function hoistToolResults(content: ContentBlockParam[]): ContentBlockParam[] {
   return [...toolResults, ...otherBlocks]
 }
 
-function normalizeUserTextContent(
+export function normalizeUserTextContent(
   a: string | ContentBlockParam[],
 ): ContentBlockParam[] {
   if (typeof a === 'string') {

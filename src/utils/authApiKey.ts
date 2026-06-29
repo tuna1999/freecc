@@ -78,7 +78,7 @@ export const getApiKeyFromConfigOrMacOSKeychain = memoize(
   },
 )
 
-function isValidApiKey(apiKey: string): boolean {
+export function isValidApiKey(apiKey: string): boolean {
   // Only allow alphanumeric characters, dashes, and underscores
   return /^[a-zA-Z0-9-_]+$/.test(apiKey)
 }
@@ -174,7 +174,7 @@ export async function removeApiKey(): Promise<void> {
   clearLegacyApiKeyPrefetch()
 }
 
-async function maybeRemoveApiKeyFromMacOSKeychain(): Promise<void> {
+export async function maybeRemoveApiKeyFromMacOSKeychain(): Promise<void> {
   try {
     await maybeRemoveApiKeyFromMacOSKeychainThrows()
   } catch (e) {

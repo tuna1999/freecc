@@ -84,7 +84,7 @@ import type { ChannelEntry } from '../types/permissions.js'
 import { getSessionId } from '../bootstrap/state.js'
 import type { Message, NormalizedUserMessage } from '../types/message.js'
 
-async function handleInitializeRequest(
+export async function handleInitializeRequest(
   request: SDKControlInitializeRequest,
   requestId: string,
   initialized: boolean,
@@ -268,7 +268,7 @@ async function handleInitializeRequest(
   }
 }
 
-async function handleRewindFiles(
+export async function handleRewindFiles(
   userMessageId: UUID,
   appState: AppState,
   setAppState: (updater: (prev: AppState) => AppState) => void,
@@ -316,7 +316,7 @@ async function handleRewindFiles(
   return { canRewind: true }
 }
 
-function handleSetPermissionMode(
+export function handleSetPermissionMode(
   request: { mode: InternalPermissionMode },
   requestId: string,
   toolPermissionContext: ToolPermissionContext,
@@ -410,7 +410,7 @@ function handleSetPermissionMode(
  * gated separately by tengu_harbor_permissions — not yet shipping on
  * interactive either.)
  */
-function handleChannelEnable(
+export function handleChannelEnable(
   requestId: string,
   serverName: string,
   connectionPool: readonly MCPServerConnection[],
@@ -534,7 +534,7 @@ function handleChannelEnable(
  * server, so reconnecting a non-channel MCP server costs one feature-flag
  * check.
  */
-function reregisterChannelHandlerAfterReconnect(
+export function reregisterChannelHandlerAfterReconnect(
   connection: MCPServerConnection,
 ): void {
   if (!(feature('KAIROS') || feature('KAIROS_CHANNELS'))) return
@@ -589,7 +589,7 @@ function reregisterChannelHandlerAfterReconnect(
  * Emits an error message in the correct format based on outputFormat.
  * When using stream-json, writes JSON to stdout; otherwise writes plain text to stderr.
  */
-function emitLoadError(
+export function emitLoadError(
   message: string,
   outputFormat: string | undefined,
 ): void {

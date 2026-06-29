@@ -118,7 +118,7 @@ export function hasWorktreeCreateHook(): boolean {
 
 /* === getHooksConfig and helpers extracted from utils/hooks.ts === */
 
-function getHooksConfig(
+export function getHooksConfig(
   appState: AppState | undefined,
   sessionId: string,
   hookEvent: HookEvent,

@@ -37,7 +37,7 @@ const DEFAULT_AWS_STS_TTL = 60 * 60 * 1000
 /**
  * Get the configured awsAuthRefresh from settings
  */
-function getConfiguredAwsAuthRefresh(): string | undefined {
+export function getConfiguredAwsAuthRefresh(): string | undefined {
   const mergedSettings = getSettings_DEPRECATED() || {}
   return mergedSettings.awsAuthRefresh
 }
@@ -62,7 +62,7 @@ export function isAwsAuthRefreshFromProjectSettings(): boolean {
 /**
  * Get the configured awsCredentialExport from settings
  */
-function getConfiguredAwsCredentialExport(): string | undefined {
+export function getConfiguredAwsCredentialExport(): string | undefined {
   const mergedSettings = getSettings_DEPRECATED() || {}
   return mergedSettings.awsCredentialExport
 }
@@ -88,7 +88,7 @@ export function isAwsCredentialExportFromProjectSettings(): boolean {
  * Run awsAuthRefresh to perform interactive authentication (e.g., aws sso login)
  * Streams output in real-time for user visibility
  */
-async function runAwsAuthRefresh(): Promise<boolean> {
+export async function runAwsAuthRefresh(): Promise<boolean> {
   const awsAuthRefresh = getConfiguredAwsAuthRefresh()
 
   if (!awsAuthRefresh) {
@@ -181,7 +181,7 @@ export function refreshAwsAuth(awsAuthRefresh: string): Promise<boolean> {
  * Run awsCredentialExport to get credentials and set environment variables
  * Expects JSON output containing AWS credentials
  */
-async function getAwsCredsFromCredentialExport(): Promise<{
+export async function getAwsCredsFromCredentialExport(): Promise<{
   accessKeyId: string
   secretAccessKey: string
   sessionToken: string

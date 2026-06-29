@@ -26,7 +26,7 @@ import { getSettings_DEPRECATED, getSettingsForSource } from './settings/setting
  * who runs `claude` in their terminal with an API key sees every CCD session
  * also use that key — and fail if it's stale/wrong-org.
  */
-function isManagedOAuthContext(): boolean {
+export function isManagedOAuthContext(): boolean {
   return (
     isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) ||
     process.env.CLAUDE_CODE_ENTRYPOINT === 'claude-desktop'
@@ -386,7 +386,7 @@ export async function getApiKeyFromApiKeyHelper(
   return _apiKeyHelperInflight.promise
 }
 
-async function _runAndCache(
+export async function _runAndCache(
   isNonInteractiveSession: boolean,
   isCold: boolean,
   epoch: number,
@@ -423,7 +423,7 @@ async function _runAndCache(
   }
 }
 
-async function _executeApiKeyHelper(
+export async function _executeApiKeyHelper(
   isNonInteractiveSession: boolean,
 ): Promise<string | null> {
   const apiKeyHelper = getConfiguredApiKeyHelper()
@@ -499,7 +499,7 @@ export function prefetchApiKeyFromApiKeyHelperIfSafe(
 
 // Re-imported helpers needed by getAnthropicApiKeyWithSource above.
 // Wrapped here to avoid a circular dep with auth.ts.
-function preferThirdPartyAuthentication(): boolean {
+export function preferThirdPartyAuthentication(): boolean {
   return isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY) ||

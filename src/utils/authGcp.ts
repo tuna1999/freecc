@@ -26,7 +26,7 @@ import { sleep } from './sleep.js'
 /**
  * Get the configured gcpAuthRefresh from settings
  */
-function getConfiguredGcpAuthRefresh(): string | undefined {
+export function getConfiguredGcpAuthRefresh(): string | undefined {
   const mergedSettings = getSettings_DEPRECATED() || {}
   return mergedSettings.gcpAuthRefresh
 }
@@ -90,7 +90,7 @@ const DEFAULT_GCP_CREDENTIAL_TTL = 60 * 60 * 1000
  * Run gcpAuthRefresh to perform interactive authentication (e.g., gcloud auth application-default login)
  * Streams output in real-time for user visibility
  */
-async function runGcpAuthRefresh(): Promise<boolean> {
+export async function runGcpAuthRefresh(): Promise<boolean> {
   const gcpAuthRefresh = getConfiguredGcpAuthRefresh()
 
   if (!gcpAuthRefresh) {

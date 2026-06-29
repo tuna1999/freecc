@@ -40,7 +40,7 @@ export type DynamicMcpState = {
  * Converts a process transport config to a scoped config.
  * The types are structurally compatible, so we just add the scope.
  */
-function toScopedConfig(
+export function toScopedConfig(
   config: McpServerConfigForProcessTransport,
 ): ScopedMcpServerConfig {
   // McpServerConfigForProcessTransport is a subset of McpServerConfig
