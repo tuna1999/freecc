@@ -221,7 +221,7 @@ let lastCredentialsMtimeMs = 0
 // Without this, terminal 1's /login fixes terminal 1; terminal 2's /login
 // then revokes terminal 1 server-side, and terminal 1's memoize never
 // re-reads — infinite /login regress (CC-1096, GH#24317).
-async function invalidateOAuthCacheIfDiskChanged(): Promise<void> {
+export async function invalidateOAuthCacheIfDiskChanged(): Promise<void> {
   try {
     const { mtimeMs } = await stat(
       join(getClaudeConfigHomeDir(), '.credentials.json'),
@@ -274,7 +274,7 @@ export function handleOAuth401Error(
   return promise
 }
 
-async function handleOAuth401ErrorImpl(
+export async function handleOAuth401ErrorImpl(
   failedAccessToken: string,
 ): Promise<boolean> {
   // Clear caches and re-read from keychain (async — sync read blocks ~100ms/call)
@@ -348,7 +348,7 @@ export function checkAndRefreshOAuthTokenIfNeeded(
   return checkAndRefreshOAuthTokenIfNeededImpl(retryCount, force)
 }
 
-async function checkAndRefreshOAuthTokenIfNeededImpl(
+export async function checkAndRefreshOAuthTokenIfNeededImpl(
   retryCount: number,
   force: boolean,
 ): Promise<boolean> {

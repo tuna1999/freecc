@@ -6,7 +6,7 @@
  * Public API re-exported from utils/hooks.ts for backward compat.
  */
 
-async function* executeHooks({
+export async function* executeHooks({
   hookInput,
   toolUseID,
   matchQuery,

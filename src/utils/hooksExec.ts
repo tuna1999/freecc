@@ -22,7 +22,7 @@ import { formatShellPrefixCommand } from './bash/shellPrefix.js'
 
 import { getHooksConfig } from './hooksConfig.js'
 
-function executeInBackground({
+export function executeInBackground({
   processId,
   hookId,
   shellCommand,
@@ -209,7 +209,7 @@ export type AggregatedHookResult = {
  * Parse and validate a JSON string against the hook output Zod schema.
  * Returns the validated output or formatted validation errors.
  */
-function validateHookJson(
+export function validateHookJson(
   jsonString: string,
 ): { json: HookJSONOutput } | { validationError: string } {
   const parsed = jsonParse(jsonString)
@@ -226,7 +226,7 @@ function validateHookJson(
   }
 }
 
-function parseHookOutput(stdout: string): {
+export function parseHookOutput(stdout: string): {
   json?: HookJSONOutput
   plainText?: string
   validationError?: string
@@ -280,7 +280,7 @@ function parseHookOutput(stdout: string): {
   }
 }
 
-function parseHttpHookOutput(body: string): {
+export function parseHttpHookOutput(body: string): {
   json?: HookJSONOutput
   validationError?: string
 } {
@@ -316,7 +316,7 @@ function parseHttpHookOutput(body: string): {
   }
 }
 
-function processHookJSONOutput({
+export function processHookJSONOutput({
   json,
   command,
   hookName,
