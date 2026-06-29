@@ -1031,7 +1031,7 @@ async function* executeHooks({
 
  * See docs/design/ps-shell-selection.md §5.1.
  */
-async function execCommandHook(
+export async function execCommandHook(
   hook: HookCommand & { type: 'command' },
   hookEvent: HookEvent | 'StatusLine' | 'FileSuggestion',
   hookName: string,
