@@ -298,29 +298,6 @@ export function buildClassifierUnavailableMessage(
 }
 
 
-export function getLastAssistantMessage(
-  messages: Message[],
-): AssistantMessage | undefined {
-  // findLast exits early from the end â€” much faster than filter + last for
-  // large message arrays (called on every REPL render via useFeedbackSurvey).
-  return messages.findLast(
-    (msg): msg is AssistantMessage => msg.type === 'assistant',
-  )
-}
-
-export function hasToolCallsInLastAssistantTurn(messages: Message[]): boolean {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]
-    if (message && message.type === 'assistant') {
-      const assistantMessage = message as AssistantMessage
-      const content = assistantMessage.message.content
-      if (Array.isArray(content)) {
-        return content.some(block => block.type === 'tool_use')
-      }
-    }
-  }
-  return false
-}
 
 function baseCreateAssistantMessage({
   content,
@@ -5384,3 +5361,10 @@ export function wrapCommandText(
 export { normalizeContentFromAPI } from './messagesContent.js'
 
 export { SYNTHETIC_MODEL, SYNTHETIC_MESSAGES, isSyntheticMessage, isSyntheticApiErrorMessage } from './messagesSynthetic.js'
+
+
+// Re-exports — extracted helpers live in dedicated modules.
+export {
+  getLastAssistantMessage,
+  hasToolCallsInLastAssistantTurn,
+} from "./messagesLookups.js"
