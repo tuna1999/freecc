@@ -163,7 +163,7 @@ import { jsonStringify, jsonParse } from './slowOperations.js'
 import { isEnvTruthy } from './envUtils.js'
 import { errorMessage, getErrnoCode } from './errors.js'
 
-const TOOL_HOOK_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000
+export const TOOL_HOOK_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000
 
 /**
  * SessionEnd hooks run during shutdown/clear and need a much tighter bound
@@ -4157,7 +4157,7 @@ export async function executeConfigChangeHooks(
   return results
 }
 
-async function executeEnvHooks(
+export async function executeEnvHooks(
   hookInput: HookInput,
   timeoutMs: number,
 ): Promise<{
@@ -4176,41 +4176,7 @@ async function executeEnvHooks(
   return { results, watchPaths, systemMessages }
 }
 
-export function executeCwdChangedHooks(
-  oldCwd: string,
-  newCwd: string,
-  timeoutMs: number = TOOL_HOOK_EXECUTION_TIMEOUT_MS,
-): Promise<{
-  results: HookOutsideReplResult[]
-  watchPaths: string[]
-  systemMessages: string[]
-}> {
-  const hookInput: CwdChangedHookInput = {
-    ...createBaseHookInput(undefined),
-    hook_event_name: 'CwdChanged',
-    old_cwd: oldCwd,
-    new_cwd: newCwd,
-  }
-  return executeEnvHooks(hookInput, timeoutMs)
-}
 
-export function executeFileChangedHooks(
-  filePath: string,
-  event: 'change' | 'add' | 'unlink',
-  timeoutMs: number = TOOL_HOOK_EXECUTION_TIMEOUT_MS,
-): Promise<{
-  results: HookOutsideReplResult[]
-  watchPaths: string[]
-  systemMessages: string[]
-}> {
-  const hookInput: FileChangedHookInput = {
-    ...createBaseHookInput(undefined),
-    hook_event_name: 'FileChanged',
-    file_path: filePath,
-    event,
-  }
-  return executeEnvHooks(hookInput, timeoutMs)
-}
 
 export type InstructionsLoadReason =
   | 'session_start'
@@ -4942,3 +4908,7 @@ export {
   hasInstructionsLoadedHook,
   hasWorktreeCreateHook,
 } from "./hooksConfig.js"
+
+
+// Re-exports — extracted helpers live in dedicated modules.
+export { executeCwdChangedHooks, executeFileChangedHooks } from "./hooksLifecycle.js"
