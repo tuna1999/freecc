@@ -2676,7 +2676,6 @@ export {
   parseHookOutput,
   parseHttpHookOutput,
   processHookJSONOutput,
-  execCommandHook,
   createBaseHookInput,
 } from "./hooksExec.js"
-export { executeHooks } from "./hooksExecution.js"
+export { executeHooks, execCommandHook } from "./hooksExecution.js"
