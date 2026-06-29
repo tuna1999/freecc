@@ -172,14 +172,6 @@ const TOOL_HOOK_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000
  * parallel, so one value suffices). Overridable via env var for users whose
  * teardown scripts need more time.
  */
-const SESSION_END_HOOK_TIMEOUT_MS_DEFAULT = 1500
-export function getSessionEndHookTimeoutMs(): number {
-  const raw = process.env.CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS
-  const parsed = raw ? parseInt(raw, 10) : NaN
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : SESSION_END_HOOK_TIMEOUT_MS_DEFAULT
-}
 
 function executeInBackground({
   processId,
@@ -1879,65 +1871,6 @@ export async function getMatchingHooks(
  * @param blockingErrors Array of blocking errors from hooks
  * @returns Formatted blocking message
  */
-export function getPreToolHookBlockingMessage(
-  hookName: string,
-  blockingError: HookBlockingError,
-): string {
-  return `${hookName} hook error: ${blockingError.blockingError}`
-}
-
-/**
- * Format a list of blocking errors from a Stop hook's configured commands.
- * @param blockingErrors Array of blocking errors from hooks
- * @returns Formatted message to give feedback to the model
- */
-export function getStopHookMessage(blockingError: HookBlockingError): string {
-  return `Stop hook feedback:\n${blockingError.blockingError}`
-}
-
-/**
- * Format a blocking error from a TeammateIdle hook.
- * @param blockingError The blocking error from the hook
- * @returns Formatted message to give feedback to the model
- */
-export function getTeammateIdleHookMessage(
-  blockingError: HookBlockingError,
-): string {
-  return `TeammateIdle hook feedback:\n${blockingError.blockingError}`
-}
-
-/**
- * Format a blocking error from a TaskCreated hook.
- * @param blockingError The blocking error from the hook
- * @returns Formatted message to give feedback to the model
- */
-export function getTaskCreatedHookMessage(
-  blockingError: HookBlockingError,
-): string {
-  return `TaskCreated hook feedback:\n${blockingError.blockingError}`
-}
-
-/**
- * Format a blocking error from a TaskCompleted hook.
- * @param blockingError The blocking error from the hook
- * @returns Formatted message to give feedback to the model
- */
-export function getTaskCompletedHookMessage(
-  blockingError: HookBlockingError,
-): string {
-  return `TaskCompleted hook feedback:\n${blockingError.blockingError}`
-}
-
-/**
- * Format a list of blocking errors from a UserPromptSubmit hook's configured commands.
- * @param blockingErrors Array of blocking errors from hooks
- * @returns Formatted blocking message
- */
-export function getUserPromptSubmitHookBlockingMessage(
-  blockingError: HookBlockingError,
-): string {
-  return `UserPromptSubmit operation blocked by hook:\n${blockingError.blockingError}`
-}
 /**
  * Common logic for executing hooks
  * @param hookInput The structured hook input that will be validated and converted to JSON
@@ -5020,3 +4953,15 @@ function getHookDefinitionsForTelemetry(
     return { type: 'unknown' }
   })
 }
+
+
+// Re-exports — extracted helpers live in dedicated modules.
+export {
+  getSessionEndHookTimeoutMs,
+  getPreToolHookBlockingMessage,
+  getStopHookMessage,
+  getTeammateIdleHookMessage,
+  getTaskCreatedHookMessage,
+  getTaskCompletedHookMessage,
+  getUserPromptSubmitHookBlockingMessage,
+} from "./hooksMessages.js"
