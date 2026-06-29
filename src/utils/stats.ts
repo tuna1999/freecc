@@ -22,18 +22,9 @@ import {
   toDateString,
   withStatsCacheLock,
 } from './statsCache.js'
+import type { DailyActivity, DailyModelTokens, SessionStats } from './statsTypes.js'
 
-export type DailyActivity = {
-  date: string // YYYY-MM-DD format
-  messageCount: number
-  sessionCount: number
-  toolCallCount: number
-}
-
-export type DailyModelTokens = {
-  date: string // YYYY-MM-DD format
-  tokensByModel: { [modelName: string]: number } // total tokens (input + output) per model
-}
+export type { DailyActivity, DailyModelTokens, SessionStats }
 
 export type StreakInfo = {
   currentStreak: number
@@ -41,13 +32,6 @@ export type StreakInfo = {
   currentStreakStart: string | null
   longestStreakStart: string | null
   longestStreakEnd: string | null
-}
-
-export type SessionStats = {
-  sessionId: string
-  duration: number // in milliseconds
-  messageCount: number
-  timestamp: string
 }
 
 export type ClaudeCodeStats = {

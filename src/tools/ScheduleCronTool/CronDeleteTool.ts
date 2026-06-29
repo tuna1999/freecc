@@ -15,6 +15,7 @@ import {
   isDurableCronEnabled,
   isKairosCronEnabled,
 } from './prompt.js'
+import { deleteOutputSchema, type DeleteOutput } from './types.js'
 import { renderDeleteResultMessage, renderDeleteToolUseMessage } from './UI.js'
 
 const inputSchema = lazySchema(() =>
@@ -24,13 +25,8 @@ const inputSchema = lazySchema(() =>
 )
 type InputSchema = ReturnType<typeof inputSchema>
 
-const outputSchema = lazySchema(() =>
-  z.object({
-    id: z.string(),
-  }),
-)
+const outputSchema = lazySchema(() => deleteOutputSchema)
 type OutputSchema = ReturnType<typeof outputSchema>
-export type DeleteOutput = z.infer<OutputSchema>
 
 export const CronDeleteTool = buildTool({
   name: CRON_DELETE_TOOL_NAME,

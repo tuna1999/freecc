@@ -297,60 +297,7 @@ export function buildClassifierUnavailableMessage(
   )
 }
 
-export const SYNTHETIC_MODEL = '<synthetic>'
 
-export const SYNTHETIC_MESSAGES = new Set([
-  INTERRUPT_MESSAGE,
-  INTERRUPT_MESSAGE_FOR_TOOL_USE,
-  CANCEL_MESSAGE,
-  REJECT_MESSAGE,
-  NO_RESPONSE_REQUESTED,
-])
-
-export function isSyntheticMessage(message: Message): boolean {
-  return (
-    message.type !== 'progress' &&
-    message.type !== 'attachment' &&
-    message.type !== 'system' &&
-    Array.isArray(message.message.content) &&
-    message.message.content[0]?.type === 'text' &&
-    SYNTHETIC_MESSAGES.has(message.message.content[0].text)
-  )
-}
-
-function isSyntheticApiErrorMessage(
-  message: Message,
-): message is AssistantMessage & { isApiErrorMessage: true } {
-  return (
-    message.type === 'assistant' &&
-    message.isApiErrorMessage === true &&
-    message.message.model === SYNTHETIC_MODEL
-  )
-}
-
-export function getLastAssistantMessage(
-  messages: Message[],
-): AssistantMessage | undefined {
-  // findLast exits early from the end — much faster than filter + last for
-  // large message arrays (called on every REPL render via useFeedbackSurvey).
-  return messages.findLast(
-    (msg): msg is AssistantMessage => msg.type === 'assistant',
-  )
-}
-
-export function hasToolCallsInLastAssistantTurn(messages: Message[]): boolean {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]
-    if (message && message.type === 'assistant') {
-      const assistantMessage = message as AssistantMessage
-      const content = assistantMessage.message.content
-      if (Array.isArray(content)) {
-        return content.some(block => block.type === 'tool_use')
-      }
-    }
-  }
-  return false
-}
 
 function baseCreateAssistantMessage({
   content,
@@ -2648,107 +2595,6 @@ export function mergeUserContentBlocks(
 
 // Sometimes the API returns empty messages (eg. "\n\n"). We need to filter these out,
 // otherwise they will give an API error when we send them to the API next time we call query().
-export function normalizeContentFromAPI(
-  contentBlocks: BetaMessage['content'],
-  tools: Tools,
-  agentId?: AgentId,
-): BetaMessage['content'] {
-  if (!contentBlocks) {
-    return []
-  }
-  return contentBlocks.map(contentBlock => {
-    switch (contentBlock.type) {
-      case 'tool_use': {
-        if (
-          typeof contentBlock.input !== 'string' &&
-          !isObject(contentBlock.input)
-        ) {
-          // we stream tool use inputs as strings, but when we fall back, they're objects
-          throw new Error('Tool use input must be a string or object')
-        }
-
-        // With fine-grained streaming on, we are getting a stringied JSON back from the API.
-        // The API has strange behaviour, where it returns nested stringified JSONs, and so
-        // we need to recursively parse these. If the top-level value returned from the API is
-        // an empty string, this should become an empty object (nested values should be empty string).
-        // TODO: This needs patching as recursive fields can still be stringified
-        let normalizedInput: unknown
-        if (typeof contentBlock.input === 'string') {
-          const parsed = safeParseJSON(contentBlock.input)
-          if (parsed === null && contentBlock.input.length > 0) {
-            // TET/FC-v3 diagnostic: the streamed tool input JSON failed to
-            // parse. We fall back to {} which means downstream validation
-            // sees empty input. The raw prefix goes to debug log only — no
-            // PII-tagged proto column exists for it yet.
-            logEvent('tengu_tool_input_json_parse_fail', {
-              toolName: sanitizeToolNameForAnalytics(contentBlock.name),
-              inputLen: contentBlock.input.length,
-            })
-            if (process.env.USER_TYPE === 'ant') {
-              logForDebugging(
-                `tool input JSON parse fail: ${contentBlock.input.slice(0, 200)}`,
-                { level: 'warn' },
-              )
-            }
-          }
-          normalizedInput = parsed ?? {}
-        } else {
-          normalizedInput = contentBlock.input
-        }
-
-        // Then apply tool-specific corrections
-        if (typeof normalizedInput === 'object' && normalizedInput !== null) {
-          const tool = findToolByName(tools, contentBlock.name)
-          if (tool) {
-            try {
-              normalizedInput = normalizeToolInput(
-                tool,
-                normalizedInput as { [key: string]: unknown },
-                agentId,
-              )
-            } catch (error) {
-              logError(new Error('Error normalizing tool input: ' + error))
-              // Keep the original input if normalization fails
-            }
-          }
-        }
-
-        return {
-          ...contentBlock,
-          input: normalizedInput,
-        }
-      }
-      case 'text':
-        if (contentBlock.text.trim().length === 0) {
-          logEvent('tengu_model_whitespace_response', {
-            length: contentBlock.text.length,
-          })
-        }
-        // Return the block as-is to preserve exact content for prompt caching.
-        // Empty text blocks are handled at the display layer and must not be
-        // altered here.
-        return contentBlock
-      case 'code_execution_tool_result':
-      case 'mcp_tool_use':
-      case 'mcp_tool_result':
-      case 'container_upload':
-        // Beta-specific content blocks - pass through as-is
-        return contentBlock
-      case 'server_tool_use':
-        if (typeof contentBlock.input === 'string') {
-          return {
-            ...contentBlock,
-            input: (safeParseJSON(contentBlock.input) ?? {}) as {
-              [key: string]: unknown
-            },
-          }
-        }
-        return contentBlock
-      default:
-        return contentBlock
-    }
-  })
-}
 
 export function isEmptyMessageText(text: string): boolean {
   return (
@@ -5510,3 +5356,15 @@ export function wrapCommandText(
       return `The user sent a new message while you were working:\n${raw}\n\nIMPORTANT: After completing your current task, you MUST address the user's message above. Do not ignore it.`
   }
 }
+
+// Re-exports — extracted helpers live in dedicated modules.
+export { normalizeContentFromAPI } from './messagesContent.js'
+
+export { SYNTHETIC_MODEL, SYNTHETIC_MESSAGES, isSyntheticMessage, isSyntheticApiErrorMessage } from './messagesSynthetic.js'
+
+
+// Re-exports � extracted helpers live in dedicated modules.
+export {
+  getLastAssistantMessage,
+  hasToolCallsInLastAssistantTurn,
+} from "./messagesLookups.js"

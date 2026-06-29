@@ -6,6 +6,7 @@ dist/
 /freecc-dev
 openclaw/
 .jarmcp/
+.desloppify/
 *.exe
 *.bun-build
 

@@ -13,33 +13,15 @@ import {
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { DESCRIPTION, PROMPT, REMOTE_TRIGGER_TOOL_NAME } from './prompt.js'
+import {
+  inputSchema,
+  type Input,
+  type InputSchema,
+  type Output,
+  type OutputSchema,
+  outputSchema,
+} from './types.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
-
-const inputSchema = lazySchema(() =>
-  z.strictObject({
-    action: z.enum(['list', 'get', 'create', 'update', 'run']),
-    trigger_id: z
-      .string()
-      .regex(/^[\w-]+$/)
-      .optional()
-      .describe('Required for get, update, and run'),
-    body: z
-      .record(z.string(), z.unknown())
-      .optional()
-      .describe('JSON body for create and update'),
-  }),
-)
-type InputSchema = ReturnType<typeof inputSchema>
-export type Input = z.infer<InputSchema>
-
-const outputSchema = lazySchema(() =>
-  z.object({
-    status: z.number(),
-    json: z.string(),
-  }),
-)
-type OutputSchema = ReturnType<typeof outputSchema>
-export type Output = z.infer<OutputSchema>
 
 const TRIGGERS_BETA = 'ccr-triggers-2026-01-30'
 

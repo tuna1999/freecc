@@ -20,6 +20,7 @@ import {
   isDurableCronEnabled,
   isKairosCronEnabled,
 } from './prompt.js'
+import { createOutputSchema, type CreateOutput } from './types.js'
 import { renderCreateResultMessage, renderCreateToolUseMessage } from './UI.js'
 
 const MAX_JOBS = 50
@@ -42,16 +43,8 @@ const inputSchema = lazySchema(() =>
 )
 type InputSchema = ReturnType<typeof inputSchema>
 
-const outputSchema = lazySchema(() =>
-  z.object({
-    id: z.string(),
-    humanSchedule: z.string(),
-    recurring: z.boolean(),
-    durable: z.boolean().optional(),
-  }),
-)
+const outputSchema = lazySchema(() => createOutputSchema)
 type OutputSchema = ReturnType<typeof outputSchema>
-export type CreateOutput = z.infer<OutputSchema>
 
 export const CronCreateTool = buildTool({
   name: CRON_CREATE_TOOL_NAME,
