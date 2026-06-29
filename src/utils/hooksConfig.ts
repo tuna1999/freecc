@@ -20,7 +20,17 @@ import { getHooksConfigFromSnapshot } from './hooks/hooksConfigSnapshot.js'
 import { getTranscriptPathForSession } from '../utils/sessionStorage.js'
 import { checkHasTrustDialogAccepted } from './config.js'
 import { shouldAllowManagedHooksOnly } from './hooks/hooksConfigSnapshot.js'
-import type { HookOutsideReplResult } from '../types/hooks.js'
+import type { AppState } from '../state/AppStateStore.js'
+import type {
+  FunctionHookMatcher,
+  HookCallbackMatcher,
+  HookEvent,
+  HookMatcher,
+  HookOutsideReplResult,
+  PluginHookMatcher,
+  SessionDerivedHookMatcher,
+  SkillHookMatcher,
+} from '../types/hooks.js'
 
 /**
  * Decide whether a hook should be skipped because the user has not
@@ -104,4 +114,100 @@ export function hasWorktreeCreateHook(): boolean {
   return registeredHooks.some(
     matcher => !(managedOnly && 'pluginRoot' in matcher),
   )
+}
+
+/* === getHooksConfig and helpers extracted from utils/hooks.ts === */
+
+function getHooksConfig(
+  appState: AppState | undefined,
+  sessionId: string,
+  hookEvent: HookEvent,
+): Array<
+  | HookMatcher
+  | HookCallbackMatcher
+  | FunctionHookMatcher
+  | PluginHookMatcher
+  | SkillHookMatcher
+  | SessionDerivedHookMatcher
+> {
+  // HookMatcher is a zod-stripped {matcher, hooks} so snapshot matchers can be
+  // pushed directly without re-wrapping.
+  const hooks: Array<
+    | HookMatcher
+    | HookCallbackMatcher
+    | FunctionHookMatcher
+    | PluginHookMatcher
+    | SkillHookMatcher
+    | SessionDerivedHookMatcher
+  > = [...(getHooksConfigFromSnapshot()?.[hookEvent] ?? [])]
+
+  // Check if only managed hooks should run (used for both registered and session hooks)
+  const managedOnly = shouldAllowManagedHooksOnly()
+
+  // Process registered hooks (SDK callbacks and plugin native hooks)
+  const registeredHooks = getRegisteredHooks()?.[hookEvent]
+  if (registeredHooks) {
+    for (const matcher of registeredHooks) {
+      // Skip plugin hooks when restricted to managed hooks only
+      // Plugin hooks have pluginRoot set, SDK callbacks do not
+      if (managedOnly && 'pluginRoot' in matcher) {
+        continue
+      }
+      hooks.push(matcher)
+    }
+  }
+
+  // Merge session hooks for the current session only
+  // Function hooks (like structured output enforcement) must be scoped to their session
+  // to prevent hooks from one agent leaking to another (e.g., verification agent to main agent)
+  // Skip session hooks entirely when allowManagedHooksOnly is set —
+  // this prevents frontmatter hooks from agents/skills from bypassing the policy.
+  // strictPluginOnlyCustomization does NOT block here — it gates at the
+  // REGISTRATION sites (runAgent.ts:526 for agent frontmatter hooks) where
+  // agentDefinition.source is known. A blanket block here would also kill
+  // plugin-provided agents' frontmatter hooks, which is too broad.
+  // Also skip if appState not provided (for backwards compatibility)
+  if (!managedOnly && appState !== undefined) {
+    const sessionHooks = getSessionHooks(appState, sessionId, hookEvent).get(
+      hookEvent,
+    )
+    if (sessionHooks) {
+      // SessionDerivedHookMatcher already includes optional skillRoot
+      for (const matcher of sessionHooks) {
+        hooks.push(matcher)
+      }
+    }
+
+    // Merge session function hooks separately (can't be persisted to HookMatcher format)
+    const sessionFunctionHooks = getSessionFunctionHooks(
+      appState,
+      sessionId,
+      hookEvent,
+    ).get(hookEvent)
+    if (sessionFunctionHooks) {
+      for (const matcher of sessionFunctionHooks) {
+        hooks.push(matcher)
+      }
+    }
+  }
+
+  return hooks
+}
+
+/**
+ * Check whether any hook (snapshot, registered, or session-derived) is
+ * configured for the given event. Used to short-circuit work that only
+ * makes sense when a hook is actually configured.
+ */
+export function hasHookForEvent(
+  hookEvent: HookEvent,
+  appState: AppState | undefined,
+  sessionId: string,
+): boolean {
+  const snap = getHooksConfigFromSnapshot()?.[hookEvent]
+  if (snap && snap.length > 0) return true
+  const reg = getRegisteredHooks()?.[hookEvent]
+  if (reg && reg.length > 0) return true
+  if (appState?.sessionHooks.get(sessionId)?.hooks[hookEvent]) return true
+  return false
 }
