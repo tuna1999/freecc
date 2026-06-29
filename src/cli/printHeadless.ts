@@ -47,7 +47,6 @@ import { isExtractModeActive } from '../memdir/paths.js'
 const extractMemoriesModule = feature('EXTRACT_MEMORIES')
   ? (require('../services/extractMemories/extractMemories.js') as typeof import('../services/extractMemories/extractMemories.js'))
   : null
-import { runHeadlessStreaming } from './print.js'
 import {
   applyMcpServerChanges as _applyMcpServerChanges,
   buildMcpServerStatuses as _buildMcpServerStatuses,
@@ -597,7 +596,7 @@ export async function runHeadless(
 
 
 
-function runHeadlessStreaming(
+export function runHeadlessStreaming(
   structuredIO: StructuredIO,
   mcpClients: MCPServerConnection[],
   commands: Command[],

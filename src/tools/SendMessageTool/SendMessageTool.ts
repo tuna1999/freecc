@@ -94,7 +94,7 @@ const inputSchema = lazySchema(() =>
 )
 type InputSchema = ReturnType<typeof inputSchema>
 
-export type Input = z.infer<InputSchema>
+export type { Input } from './types.js'
 
 export type {
   MessageRouting,
