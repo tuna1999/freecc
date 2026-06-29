@@ -297,36 +297,6 @@ export function buildClassifierUnavailableMessage(
   )
 }
 
-export const SYNTHETIC_MODEL = '<synthetic>'
-
-export const SYNTHETIC_MESSAGES = new Set([
-  INTERRUPT_MESSAGE,
-  INTERRUPT_MESSAGE_FOR_TOOL_USE,
-  CANCEL_MESSAGE,
-  REJECT_MESSAGE,
-  NO_RESPONSE_REQUESTED,
-])
-
-export function isSyntheticMessage(message: Message): boolean {
-  return (
-    message.type !== 'progress' &&
-    message.type !== 'attachment' &&
-    message.type !== 'system' &&
-    Array.isArray(message.message.content) &&
-    message.message.content[0]?.type === 'text' &&
-    SYNTHETIC_MESSAGES.has(message.message.content[0].text)
-  )
-}
-
-function isSyntheticApiErrorMessage(
-  message: Message,
-): message is AssistantMessage & { isApiErrorMessage: true } {
-  return (
-    message.type === 'assistant' &&
-    message.isApiErrorMessage === true &&
-    message.message.model === SYNTHETIC_MODEL
-  )
-}
 
 export function getLastAssistantMessage(
   messages: Message[],
@@ -5412,3 +5382,5 @@ export function wrapCommandText(
 
 // Re-exports — extracted helpers live in dedicated modules.
 export { normalizeContentFromAPI } from './messagesContent.js'
+
+export { SYNTHETIC_MODEL, SYNTHETIC_MESSAGES, isSyntheticMessage, isSyntheticApiErrorMessage } from './messagesSynthetic.js'
