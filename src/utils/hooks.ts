@@ -275,17 +275,6 @@ function executeInBackground({
  *
  * @returns true if hook should be skipped, false if it should execute
  */
-export function shouldSkipHookDueToTrust(): boolean {
-  // In non-interactive mode (SDK), trust is implicit - always execute
-  const isInteractive = !getIsNonInteractiveSession()
-  if (!isInteractive) {
-    return false
-  }
-
-  // In interactive mode, ALL hooks require trust
-  const hasTrust = checkHasTrustDialogAccepted()
-  return !hasTrust
-}
 
 /**
  * Creates the base hook input that's common to all hook types
@@ -2913,9 +2902,6 @@ export type HookOutsideReplResult = {
   systemMessage?: string
 }
 
-export function hasBlockingResult(results: HookOutsideReplResult[]): boolean {
-  return results.some(r => r.blocked)
-}
 
 /**
  * Execute hooks outside of the REPL (e.g. notifications, session end)
@@ -4244,13 +4230,6 @@ export type InstructionsMemoryType = 'User' | 'Project' | 'Local' | 'Managed'
  * hooks (plugin hooks + SDK callback hooks via registerHookCallbacks). Session-
  * derived hooks (structured output enforcement etc.) are internal and not checked.
  */
-export function hasInstructionsLoadedHook(): boolean {
-  const snapshotHooks = getHooksConfigFromSnapshot()?.['InstructionsLoaded']
-  if (snapshotHooks && snapshotHooks.length > 0) return true
-  const registeredHooks = getRegisteredHooks()?.['InstructionsLoaded']
-  if (registeredHooks && registeredHooks.length > 0) return true
-  return false
-}
 
 /**
  * Execute InstructionsLoaded hooks when an instruction file (CLAUDE.md or
@@ -4840,17 +4819,6 @@ async function executeHookCallback({
  * true but executeWorktreeCreateHook() finds no matching hooks and throws,
  * blocking the git-worktree fallback.
  */
-export function hasWorktreeCreateHook(): boolean {
-  const snapshotHooks = getHooksConfigFromSnapshot()?.['WorktreeCreate']
-  if (snapshotHooks && snapshotHooks.length > 0) return true
-  const registeredHooks = getRegisteredHooks()?.['WorktreeCreate']
-  if (!registeredHooks || registeredHooks.length === 0) return false
-  // Mirror getHooksConfig(): skip plugin hooks in managed-only mode
-  const managedOnly = shouldAllowManagedHooksOnly()
-  return registeredHooks.some(
-    matcher => !(managedOnly && 'pluginRoot' in matcher),
-  )
-}
 
 /**
  * Execute WorktreeCreate hooks.
@@ -4965,3 +4933,12 @@ export {
   getTaskCompletedHookMessage,
   getUserPromptSubmitHookBlockingMessage,
 } from "./hooksMessages.js"
+
+
+// Re-exports — extracted helpers live in dedicated modules.
+export {
+  shouldSkipHookDueToTrust,
+  hasBlockingResult,
+  hasInstructionsLoadedHook,
+  hasWorktreeCreateHook,
+} from "./hooksConfig.js"
