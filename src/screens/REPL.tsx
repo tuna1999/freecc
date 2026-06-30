@@ -11,8 +11,8 @@ import { tmpdir } from 'os';
 // eslint-disable-next-line custom-rules/prefer-use-keybindings -- / n N Esc [ v are bare letters in transcript modal context, same class as g/G/j/k in ScrollKeybindingHandler
 import { useInput } from '../ink.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
-import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js';
 import type { JumpHandle } from '../components/VirtualMessageList.js';
+import { useTranscriptSearch } from './REPL/useTranscriptSearch.js';
 import { renderMessagesToPlainText } from '../utils/exportRenderer.js';
 import { openFileInExternalEditor } from '../utils/editor.js';
 import { writeFile } from 'fs/promises';
@@ -4059,74 +4059,29 @@ export function REPL({
   // Props for GlobalKeybindingHandlers component (rendered inside KeybindingSetup)
   const virtualScrollActive = isFullscreenEnvEnabled() && !disableVirtualScroll;
 
-  // Transcript search state. Hooks must be unconditional so they live here
-  // (not inside the `if (screen === 'transcript')` branch below); isActive
-  // gates the useInput. Query persists across bar open/close so n/N keep
-  // working after Enter dismisses the bar (less semantics).
-  const jumpRef = useRef<JumpHandle | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchCount, setSearchCount] = useState(0);
-  const [searchCurrent, setSearchCurrent] = useState(0);
-  const onSearchMatchesChange = useCallback((count: number, current: number) => {
-    setSearchCount(count);
-    setSearchCurrent(current);
-  }, []);
-  useInput((input, key, event) => {
-    if (key.ctrl || key.meta) return;
-    // No Esc handling here — less has no navigating mode. Search state
-    // (highlights, n/N) is just state. Esc/q/ctrl+c → transcript:exit
-    // (ungated). Highlights clear on exit via the screen-change effect.
-    if (input === '/') {
-      // Capture scrollTop NOW — typing is a preview, 0-matches snaps
-      // back here. Synchronous ref write, fires before the bar's
-      // mount-effect calls setSearchQuery.
-      jumpRef.current?.setAnchor();
-      setSearchOpen(true);
-      event.stopImmediatePropagation();
-      return;
-    }
-    // Held-key batching: tokenizer coalesces to 'nnn'. Same uniform-batch
-    // pattern as modalPagerAction in ScrollKeybindingHandler.tsx. Each
-    // repeat is a step (n isn't idempotent like g).
-    const c = input[0];
-    if ((c === 'n' || c === 'N') && input === c.repeat(input.length) && searchCount > 0) {
-      const fn = c === 'n' ? jumpRef.current?.nextMatch : jumpRef.current?.prevMatch;
-      if (fn) for (let i = 0; i < input.length; i++) fn();
-      event.stopImmediatePropagation();
-    }
-  },
-  // Search needs virtual scroll (jumpRef drives VirtualMessageList). [
-  // kills it, so !dumpMode — after [ there's nothing to jump in.
-  {
-    isActive: screen === 'transcript' && virtualScrollActive && !searchOpen && !dumpMode
-  });
+  // Transcript search state. Search-input concern extracted into
+  // useTranscriptSearch; escape hatches (q, [, v) stay here because they
+  // touch dump-mode + editor-tempfile rendering that's caller-managed.
   const {
-    setQuery: setHighlight,
+    jumpRef,
+    searchOpen,
+    searchQuery,
+    searchCount,
+    searchCurrent,
+    setHighlight,
+    setPositions,
     scanElement,
-    setPositions
-  } = useSearchHighlight();
+    onSearchMatchesChange
+  } = useTranscriptSearch({
+    screen,
+    virtualScrollActive,
+    dumpMode,
+    inTranscript
+  });
 
-  // Resize → abort search. Positions are (msg, query, WIDTH)-keyed —
-  // cached positions are stale after a width change (new layout, new
-  // wrapping). Clearing searchQuery triggers VML's setSearchQuery('')
-  // which clears positionsCache + setPositions(null). Bar closes.
-  // User hits / again → fresh everything.
+  // Terminal width is needed here too (for companionNarrow layout) —
+  // useTranscriptSearch keeps its own copy to drive the resize-clear effect.
   const transcriptCols = useTerminalSize().columns;
-  const prevColsRef = React.useRef(transcriptCols);
-  React.useEffect(() => {
-    if (prevColsRef.current !== transcriptCols) {
-      prevColsRef.current = transcriptCols;
-      if (searchQuery || searchOpen) {
-        setSearchOpen(false);
-        setSearchQuery('');
-        setSearchCount(0);
-        setSearchCurrent(0);
-        jumpRef.current?.disarmSearch();
-        setHighlight('');
-      }
-    }
-  }, [transcriptCols, searchQuery, searchOpen, setHighlight]);
 
   // Transcript escape hatches. Bare letters in modal context (no prompt
   // competing for input) — same class as g/G/j/k in ScrollKeybindingHandler.
@@ -4203,25 +4158,16 @@ export function REPL({
   // surprise n/N on re-entry. Same exit resets [ dump mode — each ctrl+o
   // entry is a fresh instance.
   const inTranscript = screen === 'transcript' && virtualScrollActive;
+  // Search reset on screen change is owned by useTranscriptSearch.
+  // Editor + dump-mode reset stay here because they touch caller state.
   useEffect(() => {
     if (!inTranscript) {
-      setSearchQuery('');
-      setSearchCount(0);
-      setSearchCurrent(0);
-      setSearchOpen(false);
       editorGenRef.current++;
       clearTimeout(editorTimerRef.current);
       setDumpMode(false);
       setEditorStatus('');
     }
   }, [inTranscript]);
-  useEffect(() => {
-    setHighlight(inTranscript ? searchQuery : '');
-    // Clear the position-based CURRENT (yellow) overlay too. setHighlight
-    // only clears the scan-based inverse. Without this, the yellow box
-    // persists at its last screen coords after ctrl-c exits transcript.
-    if (!inTranscript) setPositions(null);
-  }, [inTranscript, searchQuery, setHighlight, setPositions]);
   const globalKeybindingProps = {
     screen,
     setScreen,
