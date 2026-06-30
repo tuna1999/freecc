@@ -87,6 +87,7 @@ import { getShortcutDisplay } from '../keybindings/shortcutFormat.js';
 import { AnimatedTerminalTitle } from './REPL/AnimatedTerminalTitle.js';
 import { TranscriptModeFooter } from './REPL/TranscriptModeFooter.js';
 import { TranscriptSearchBar } from './REPL/TranscriptSearchBar.js';
+import { useREPLInput } from './REPL/useREPLInput.js';
 import { CancelRequestHandler } from '../hooks/useCancelRequest.js';
 import { useBackgroundTaskNavigation } from '../hooks/useBackgroundTaskNavigation.js';
 import { useSwarmInitialization } from '../hooks/useSwarmInitialization.js';
@@ -1125,55 +1126,37 @@ export function REPL({
     messagesLength: number;
     streamingToolUsesLength: number;
   } | null>(null);
-  // Initialize input with any early input that was captured before REPL was ready.
-  // Using lazy initialization ensures cursor offset is set correctly in PromptInput.
-  const [inputValue, setInputValueRaw] = useState(() => consumeEarlyInput());
-  const inputValueRef = useRef(inputValue);
-  inputValueRef.current = inputValue;
+  // Input state cluster extracted into useREPLInput hook. Owns inputValue +
+// inputMode + stashedPrompt + pastedContents + vimMode + isPromptInputActive
+// + the wrapped setInputValue that co-locates suppression/repin/intercept.
+  // Keeping insertTextRef here — it lives next to the input state but is
+  // a separate ref owned by PromptInput, not part of the input cluster.
   const insertTextRef = useRef<{
     insert: (text: string) => void;
     setInputWithCursor: (value: string, cursor: number) => void;
     cursorOffset: number;
   } | null>(null);
-
-  // Wrap setInputValue to co-locate suppression state updates.
-  // Both setState calls happen in the same synchronous context so React
-  // batches them into a single render, eliminating the extra render that
-  // the previous useEffect → setState pattern caused.
-  const setInputValue = useCallback((value: string) => {
-    if (trySuggestBgPRIntercept(inputValueRef.current, value)) return;
-    // In fullscreen mode, typing into an empty prompt re-pins scroll to
-    // bottom. Only fires on empty→non-empty so scrolling up to reference
-    // something while composing a message doesn't yank the view back on
-    // every keystroke. Restores the pre-fullscreen muscle memory of
-    // typing to snap back to the end of the conversation.
-    // Skipped if the user scrolled within the last 3s — they're actively
-    // reading, not lost. lastUserScrollTsRef starts at 0 so the first-
-    // ever keypress (no scroll yet) always repins.
-    if (inputValueRef.current === '' && value !== '' && Date.now() - lastUserScrollTsRef.current >= RECENT_SCROLL_REPIN_WINDOW_MS) {
-      repinScroll();
-    }
-    // Sync ref immediately (like setMessages) so callers that read
-    // inputValueRef before React commits — e.g. the auto-restore finally
-    // block's `=== ''` guard — see the fresh value, not the stale render.
-    inputValueRef.current = value;
-    setInputValueRaw(value);
-    setIsPromptInputActive(value.trim().length > 0);
-  }, [setIsPromptInputActive, repinScroll, trySuggestBgPRIntercept]);
-
-  // Schedule a timeout to stop suppressing dialogs after the user stops typing.
-  // Only manages the timeout — the immediate activation is handled by setInputValue above.
-  useEffect(() => {
-    if (inputValue.trim().length === 0) return;
-    const timer = setTimeout(setIsPromptInputActive, PROMPT_SUPPRESSION_MS, false);
-    return () => clearTimeout(timer);
-  }, [inputValue]);
-  const [inputMode, setInputMode] = useState<PromptInputMode>('prompt');
-  const [stashedPrompt, setStashedPrompt] = useState<{
-    text: string;
-    cursorOffset: number;
-    pastedContents: Record<number, PastedContent>;
-  } | undefined>();
+  const {
+    inputValue,
+    setInputValue,
+    inputMode,
+    setInputMode,
+    stashedPrompt,
+    setStashedPrompt,
+    pastedContents,
+    setPastedContents,
+    vimMode,
+    setVimMode,
+    isPromptInputActive,
+    setIsPromptInputActive,
+    inputValueRef,
+  } = useREPLInput({
+    trySuggestBgPRIntercept,
+    repinScroll,
+    PROMPT_SUPPRESSION_MS,
+    lastUserScrollTsRef,
+    RECENT_SCROLL_REPIN_WINDOW_MS,
+  });
 
   // Callback to filter commands based on CCR's available slash commands
   const handleRemoteInit = useCallback((remoteSlashCommands: string[]) => {
