@@ -1149,7 +1149,6 @@ export function REPL({
     vimMode,
     setVimMode,
     isPromptInputActive,
-    setIsPromptInputActive,
     inputValueRef,
   } = useREPLInput({
     trySuggestBgPRIntercept,
@@ -4149,7 +4148,6 @@ export function REPL({
   // unrelated normal-mode text (overlay is alt-screen-global) and avoids
   // surprise n/N on re-entry. Same exit resets [ dump mode — each ctrl+o
   // entry is a fresh instance.
-  // (inTranscript is now declared above the useTranscriptSearch call.)
   // Search reset on screen change is owned by useTranscriptSearch.
   // Editor + dump-mode reset stay here because they touch caller state.
   useEffect(() => {

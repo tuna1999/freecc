@@ -68,7 +68,6 @@ export type UseREPLInputResult = {
   vimMode: VimMode;
   setVimMode: (mode: VimMode) => void;
   isPromptInputActive: boolean;
-  setIsPromptInputActive: (active: boolean) => void;
   /** Mirror ref — read the latest inputValue without subscribing. */
   inputValueRef: MutableRefObject<string>;
 };
@@ -164,7 +163,6 @@ export function useREPLInput(params: UseREPLInputParams): UseREPLInputResult {
     vimMode,
     setVimMode,
     isPromptInputActive,
-    setIsPromptInputActive: setIsPromptInputActiveRaw,
     inputValueRef,
   };
 }
