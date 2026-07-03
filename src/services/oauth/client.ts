@@ -13,6 +13,8 @@ import {
 import {
   checkAndRefreshOAuthTokenIfNeeded,
   getClaudeAIOAuthTokens,
+} from '../../utils/authClaudeAiOAuth.js'
+import {
   hasProfileScope,
   isClaudeAISubscriber,
   saveApiKey,

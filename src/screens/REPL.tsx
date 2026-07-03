@@ -4,25 +4,24 @@ import { feature } from 'bun:bundle';
 import { spawnSync } from 'child_process';
 import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens } from '../bootstrap/state.js';
 import { parseTokenBudget } from '../utils/tokenBudget.js';
+import { median } from '../utils/median.js';
 import { count } from '../utils/array.js';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
-import figures from 'figures';
 // eslint-disable-next-line custom-rules/prefer-use-keybindings -- / n N Esc [ v are bare letters in transcript modal context, same class as g/G/j/k in ScrollKeybindingHandler
 import { useInput } from '../ink.js';
-import { useSearchInput } from '../hooks/useSearchInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
-import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js';
 import type { JumpHandle } from '../components/VirtualMessageList.js';
+import { useTranscriptSearch } from './REPL/useTranscriptSearch.js';
 import { renderMessagesToPlainText } from '../utils/exportRenderer.js';
 import { openFileInExternalEditor } from '../utils/editor.js';
 import { writeFile } from 'fs/promises';
-import { Box, Text, useStdin, useTheme, useTerminalFocus, useTerminalTitle, useTabStatus } from '../ink.js';
+import { Box, Text, useStdin, useTheme, useTerminalFocus, useTabStatus } from '../ink.js';
 import type { TabStatusKind } from '../ink/hooks/use-tab-status.js';
 import { CostThresholdDialog } from '../components/CostThresholdDialog.js';
 import { IdleReturnDialog } from '../components/IdleReturnDialog.js';
 import * as React from 'react';
-import { useEffect, useMemo, useRef, useState, useCallback, useDeferredValue, useLayoutEffect, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, useDeferredValue, useLayoutEffect } from 'react';
 import { useNotifications } from '../context/notifications.js';
 import { sendNotification } from '../services/notifier.js';
 import { startPreventSleep, stopPreventSleep } from '../services/preventSleep.js';
@@ -84,8 +83,11 @@ import { useApiKeyVerification } from '../hooks/useApiKeyVerification.js';
 import { GlobalKeybindingHandlers } from '../hooks/useGlobalKeybindings.js';
 import { CommandKeybindingHandlers } from '../hooks/useCommandKeybindings.js';
 import { KeybindingSetup } from '../keybindings/KeybindingProviderSetup.js';
-import { useShortcutDisplay } from '../keybindings/useShortcutDisplay.js';
 import { getShortcutDisplay } from '../keybindings/shortcutFormat.js';
+import { AnimatedTerminalTitle } from './REPL/AnimatedTerminalTitle.js';
+import { TranscriptModeFooter } from './REPL/TranscriptModeFooter.js';
+import { TranscriptSearchBar } from './REPL/TranscriptSearchBar.js';
+import { useREPLInput } from './REPL/useREPLInput.js';
 import { CancelRequestHandler } from '../hooks/useCancelRequest.js';
 import { useBackgroundTaskNavigation } from '../hooks/useBackgroundTaskNavigation.js';
 import { useSwarmInitialization } from '../hooks/useSwarmInitialization.js';
@@ -312,221 +314,15 @@ const RECENT_SCROLL_REPIN_WINDOW_MS = 3000;
 // 100 files should be sufficient for most coding sessions while preventing
 // memory issues when working across many files in large projects
 
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? Math.round((sorted[mid - 1]! + sorted[mid]!) / 2) : sorted[mid]!;
-}
-
 /**
- * Small component to display transcript mode footer with dynamic keybinding.
- * Must be rendered inside KeybindingSetup to access keybinding context.
+ * Render-only components extracted from REPL.tsx in the mid-elegance refactor:
+ *   - TranscriptModeFooter: bottom-of-screen keybinding hints
+ *   - TranscriptSearchBar:  /-style search input
+ *   - AnimatedTerminalTitle: 960ms tab-title tick
+ * All three are pure leaf components with no business logic. The animation
+ * tick was the biggest win — before extraction, the 960ms setInterval
+ * re-rendered the entire REPL tree on every turn, dragging PromptInput along.
  */
-function TranscriptModeFooter(t0) {
-  const $ = _c(9);
-  const {
-    showAllInTranscript,
-    virtualScroll,
-    searchBadge,
-    suppressShowAll: t1,
-    status
-  } = t0;
-  const suppressShowAll = t1 === undefined ? false : t1;
-  const toggleShortcut = useShortcutDisplay("app:toggleTranscript", "Global", "ctrl+o");
-  const showAllShortcut = useShortcutDisplay("transcript:toggleShowAll", "Transcript", "ctrl+e");
-  const t2 = searchBadge ? " \xB7 n/N to navigate" : virtualScroll ? ` · ${figures.arrowUp}${figures.arrowDown} scroll · home/end top/bottom` : suppressShowAll ? "" : ` · ${showAllShortcut} to ${showAllInTranscript ? "collapse" : "show all"}`;
-  let t3;
-  if ($[0] !== t2 || $[1] !== toggleShortcut) {
-    t3 = <Text dimColor={true}>Showing detailed transcript · {toggleShortcut} to toggle{t2}</Text>;
-    $[0] = t2;
-    $[1] = toggleShortcut;
-    $[2] = t3;
-  } else {
-    t3 = $[2];
-  }
-  let t4;
-  if ($[3] !== searchBadge || $[4] !== status) {
-    t4 = status ? <><Box flexGrow={1} /><Text>{status} </Text></> : searchBadge ? <><Box flexGrow={1} /><Text dimColor={true}>{searchBadge.current}/{searchBadge.count}{"  "}</Text></> : null;
-    $[3] = searchBadge;
-    $[4] = status;
-    $[5] = t4;
-  } else {
-    t4 = $[5];
-  }
-  let t5;
-  if ($[6] !== t3 || $[7] !== t4) {
-    t5 = <Box noSelect={true} alignItems="center" alignSelf="center" borderTopDimColor={true} borderBottom={false} borderLeft={false} borderRight={false} borderStyle="single" marginTop={1} paddingLeft={2} width="100%">{t3}{t4}</Box>;
-    $[6] = t3;
-    $[7] = t4;
-    $[8] = t5;
-  } else {
-    t5 = $[8];
-  }
-  return t5;
-}
-
-/** less-style / bar. 1-row, same border-top styling as TranscriptModeFooter
- *  so swapping them in the bottom slot doesn't shift ScrollBox height.
- *  useSearchInput handles readline editing; we report query changes and
- *  render the counter. Incremental — re-search + highlight per keystroke. */
-function TranscriptSearchBar({
-  jumpRef,
-  count,
-  current,
-  onClose,
-  onCancel,
-  setHighlight,
-  initialQuery
-}: {
-  jumpRef: RefObject<JumpHandle | null>;
-  count: number;
-  current: number;
-  /** Enter — commit. Query persists for n/N. */
-  onClose: (lastQuery: string) => void;
-  /** Esc/ctrl+c/ctrl+g — undo to pre-/ state. */
-  onCancel: () => void;
-  setHighlight: (query: string) => void;
-  // Seed with the previous query (less: / shows last pattern). Mount-fire
-  // of the effect re-scans with the same query — idempotent (same matches,
-  // nearest-ptr, same highlights). User can edit or clear.
-  initialQuery: string;
-}): React.ReactNode {
-  const {
-    query,
-    cursorOffset
-  } = useSearchInput({
-    isActive: true,
-    initialQuery,
-    onExit: () => onClose(query),
-    onCancel
-  });
-  // Index warm-up runs before the query effect so it measures the real
-  // cost — otherwise setSearchQuery fills the cache first and warm
-  // reports ~0ms while the user felt the actual lag.
-  // First / in a transcript session pays the extractSearchText cost.
-  // Subsequent / return 0 immediately (indexWarmed ref in VML).
-  // Transcript is frozen at ctrl+o so the cache stays valid.
-  // Initial 'building' so warmDone is false on mount — the [query] effect
-  // waits for the warm effect's first resolve instead of racing it. With
-  // null initial, warmDone would be true on mount → [query] fires →
-  // setSearchQuery fills cache → warm reports ~0ms while the user felt
-  // the real lag.
-  const [indexStatus, setIndexStatus] = React.useState<'building' | {
-    ms: number;
-  } | null>('building');
-  React.useEffect(() => {
-    let alive = true;
-    const warm = jumpRef.current?.warmSearchIndex;
-    if (!warm) {
-      setIndexStatus(null); // VML not mounted yet — rare, skip indicator
-      return;
-    }
-    setIndexStatus('building');
-    warm().then(ms => {
-      if (!alive) return;
-      // <20ms = imperceptible. No point showing "indexed in 3ms".
-      if (ms < 20) {
-        setIndexStatus(null);
-      } else {
-        setIndexStatus({
-          ms
-        });
-        setTimeout(() => alive && setIndexStatus(null), 2000);
-      }
-    });
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount-only: bar opens once per /
-  // Gate the query effect on warm completion. setHighlight stays instant
-  // (screen-space overlay, no indexing). setSearchQuery (the scan) waits.
-  const warmDone = indexStatus !== 'building';
-  useEffect(() => {
-    if (!warmDone) return;
-    jumpRef.current?.setSearchQuery(query);
-    setHighlight(query);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, warmDone]);
-  const off = cursorOffset;
-  const cursorChar = off < query.length ? query[off] : ' ';
-  return <Box borderTopDimColor borderBottom={false} borderLeft={false} borderRight={false} borderStyle="single" marginTop={1} paddingLeft={2} width="100%"
-  // applySearchHighlight scans the whole screen buffer. The query
-  // text rendered here IS on screen — /foo matches its own 'foo' in
-  // the bar. With no content matches that's the ONLY visible match →
-  // gets CURRENT → underlined. noSelect makes searchHighlight.ts:76
-  // skip these cells (same exclusion as gutters). You can't text-
-  // select the bar either; it's transient chrome, fine.
-  noSelect>
-      <Text>/</Text>
-      <Text>{query.slice(0, off)}</Text>
-      <Text inverse>{cursorChar}</Text>
-      {off < query.length && <Text>{query.slice(off + 1)}</Text>}
-      <Box flexGrow={1} />
-      {indexStatus === 'building' ? <Text dimColor>indexing… </Text> : indexStatus ? <Text dimColor>indexed in {indexStatus.ms}ms </Text> : count === 0 && query ? <Text color="error">no matches </Text> : count > 0 ?
-    // Engine-counted (indexOf on extractSearchText). May drift from
-    // render-count for ghost/phantom messages — badge is a rough
-    // location hint. scanElement gives exact per-message positions
-    // but counting ALL would cost ~1-3ms × matched-messages.
-    <Text dimColor>
-          {current}/{count}
-          {'  '}
-        </Text> : null}
-    </Box>;
-}
-const TITLE_ANIMATION_FRAMES = ['⠂', '⠐'];
-const TITLE_STATIC_PREFIX = '✳';
-const TITLE_ANIMATION_INTERVAL_MS = 960;
-
-/**
- * Sets the terminal tab title, with an animated prefix glyph while a query
- * is running. Isolated from REPL so the 960ms animation tick re-renders only
- * this leaf component (which returns null — pure side-effect) instead of the
- * entire REPL tree. Before extraction, the tick was ~1 REPL render/sec for
- * the duration of every turn, dragging PromptInput and friends along.
- */
-function AnimatedTerminalTitle(t0) {
-  const $ = _c(6);
-  const {
-    isAnimating,
-    title,
-    disabled,
-    noPrefix
-  } = t0;
-  const terminalFocused = useTerminalFocus();
-  const [frame, setFrame] = useState(0);
-  let t1;
-  let t2;
-  if ($[0] !== disabled || $[1] !== isAnimating || $[2] !== noPrefix || $[3] !== terminalFocused) {
-    t1 = () => {
-      if (disabled || noPrefix || !isAnimating || !terminalFocused) {
-        return;
-      }
-      const interval = setInterval(_temp2, TITLE_ANIMATION_INTERVAL_MS, setFrame);
-      return () => clearInterval(interval);
-    };
-    t2 = [disabled, noPrefix, isAnimating, terminalFocused];
-    $[0] = disabled;
-    $[1] = isAnimating;
-    $[2] = noPrefix;
-    $[3] = terminalFocused;
-    $[4] = t1;
-    $[5] = t2;
-  } else {
-    t1 = $[4];
-    t2 = $[5];
-  }
-  useEffect(t1, t2);
-  const prefix = isAnimating ? TITLE_ANIMATION_FRAMES[frame] ?? TITLE_STATIC_PREFIX : TITLE_STATIC_PREFIX;
-  useTerminalTitle(disabled ? null : noPrefix ? title : `${prefix} ${title}`);
-  return null;
-}
-function _temp2(setFrame_0) {
-  return setFrame_0(_temp);
-}
-function _temp(f) {
-  return (f + 1) % TITLE_ANIMATION_FRAMES.length;
-}
 export type Props = {
   commands: Command[];
   debug: boolean;
@@ -983,7 +779,7 @@ export function REPL({
   const PROMPT_SUPPRESSION_MS = 1500;
   // True when user is actively typing — defers interrupt dialogs so keystrokes
   // don't accidentally dismiss or answer a permission prompt the user hasn't read yet.
-  const [isPromptInputActive, setIsPromptInputActive] = React.useState(false);
+  // Moved into useREPLInput (line ~1150) — owned by the input cluster.
   const [autoUpdaterResult, setAutoUpdaterResult] = useState<AutoUpdaterResult | null>(null);
   useEffect(() => {
     if (autoUpdaterResult?.notifications) {
@@ -1330,55 +1126,37 @@ export function REPL({
     messagesLength: number;
     streamingToolUsesLength: number;
   } | null>(null);
-  // Initialize input with any early input that was captured before REPL was ready.
-  // Using lazy initialization ensures cursor offset is set correctly in PromptInput.
-  const [inputValue, setInputValueRaw] = useState(() => consumeEarlyInput());
-  const inputValueRef = useRef(inputValue);
-  inputValueRef.current = inputValue;
+  // Input state cluster extracted into useREPLInput hook. Owns inputValue +
+// inputMode + stashedPrompt + pastedContents + vimMode + isPromptInputActive
+// + the wrapped setInputValue that co-locates suppression/repin/intercept.
+  // Keeping insertTextRef here — it lives next to the input state but is
+  // a separate ref owned by PromptInput, not part of the input cluster.
   const insertTextRef = useRef<{
     insert: (text: string) => void;
     setInputWithCursor: (value: string, cursor: number) => void;
     cursorOffset: number;
   } | null>(null);
-
-  // Wrap setInputValue to co-locate suppression state updates.
-  // Both setState calls happen in the same synchronous context so React
-  // batches them into a single render, eliminating the extra render that
-  // the previous useEffect → setState pattern caused.
-  const setInputValue = useCallback((value: string) => {
-    if (trySuggestBgPRIntercept(inputValueRef.current, value)) return;
-    // In fullscreen mode, typing into an empty prompt re-pins scroll to
-    // bottom. Only fires on empty→non-empty so scrolling up to reference
-    // something while composing a message doesn't yank the view back on
-    // every keystroke. Restores the pre-fullscreen muscle memory of
-    // typing to snap back to the end of the conversation.
-    // Skipped if the user scrolled within the last 3s — they're actively
-    // reading, not lost. lastUserScrollTsRef starts at 0 so the first-
-    // ever keypress (no scroll yet) always repins.
-    if (inputValueRef.current === '' && value !== '' && Date.now() - lastUserScrollTsRef.current >= RECENT_SCROLL_REPIN_WINDOW_MS) {
-      repinScroll();
-    }
-    // Sync ref immediately (like setMessages) so callers that read
-    // inputValueRef before React commits — e.g. the auto-restore finally
-    // block's `=== ''` guard — see the fresh value, not the stale render.
-    inputValueRef.current = value;
-    setInputValueRaw(value);
-    setIsPromptInputActive(value.trim().length > 0);
-  }, [setIsPromptInputActive, repinScroll, trySuggestBgPRIntercept]);
-
-  // Schedule a timeout to stop suppressing dialogs after the user stops typing.
-  // Only manages the timeout — the immediate activation is handled by setInputValue above.
-  useEffect(() => {
-    if (inputValue.trim().length === 0) return;
-    const timer = setTimeout(setIsPromptInputActive, PROMPT_SUPPRESSION_MS, false);
-    return () => clearTimeout(timer);
-  }, [inputValue]);
-  const [inputMode, setInputMode] = useState<PromptInputMode>('prompt');
-  const [stashedPrompt, setStashedPrompt] = useState<{
-    text: string;
-    cursorOffset: number;
-    pastedContents: Record<number, PastedContent>;
-  } | undefined>();
+  const {
+    inputValue,
+    setInputValue,
+    setInputValueRaw,
+    inputMode,
+    setInputMode,
+    stashedPrompt,
+    setStashedPrompt,
+    pastedContents,
+    setPastedContents,
+    vimMode,
+    setVimMode,
+    isPromptInputActive,
+    inputValueRef,
+  } = useREPLInput({
+    trySuggestBgPRIntercept,
+    repinScroll,
+    PROMPT_SUPPRESSION_MS,
+    lastUserScrollTsRef,
+    RECENT_SCROLL_REPIN_WINDOW_MS,
+  });
 
   // Callback to filter commands based on CCR's available slash commands
   const handleRemoteInit = useCallback((remoteSlashCommands: string[]) => {
@@ -1424,7 +1202,6 @@ export function REPL({
 
   // Use whichever remote mode is active
   const activeRemote = sshRemote.isRemoteMode ? sshRemote : directConnect.isRemoteMode ? directConnect : remoteSession;
-  const [pastedContents, setPastedContents] = useState<Record<number, PastedContent>>({});
   const [submitCount, setSubmitCount] = useState(0);
   // Ref instead of state to avoid triggering React re-renders on every
   // streaming text_delta. The spinner reads this via its animation timer.
@@ -1508,7 +1285,6 @@ export function REPL({
     current: provisionContentReplacementState(initialMessages, initialContentReplacements)
   }));
   const [haveShownCostDialog, setHaveShownCostDialog] = useState(getGlobalConfig().hasAcknowledgedCostThreshold);
-  const [vimMode, setVimMode] = useState<VimMode>('INSERT');
   const [showBashesDialog, setShowBashesDialog] = useState<string | boolean>(false);
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
@@ -3253,11 +3029,11 @@ export function REPL({
             // Restore stashed prompt after local-jsx command completes.
             // The normal stash restoration path (below) is skipped because
             // local-jsx commands return early from onSubmit.
-            if (stashedPrompt !== undefined) {
+            if (stashedPrompt !== null) {
               setInputValue(stashedPrompt.text);
               helpers.setCursorOffset(stashedPrompt.cursorOffset);
               setPastedContents(stashedPrompt.pastedContents);
-              setStashedPrompt(undefined);
+              setStashedPrompt(null);
             }
           };
 
@@ -3346,11 +3122,11 @@ export function REPL({
     // accepting speculation, or in remote mode (which sends via WS and
     // returns early without calling handlePromptSubmit).
     const submitsNow = !isLoading || speculationAccept || activeRemote.isRemoteMode;
-    if (stashedPrompt !== undefined && !isSlashCommand && submitsNow) {
+    if (stashedPrompt !== null && !isSlashCommand && submitsNow) {
       setInputValue(stashedPrompt.text);
       helpers.setCursorOffset(stashedPrompt.cursorOffset);
       setPastedContents(stashedPrompt.pastedContents);
-      setStashedPrompt(undefined);
+      setStashedPrompt(null);
     } else if (submitsNow) {
       if (!options?.fromKeybinding) {
         // Clear input when not loading or accepting speculation.
@@ -3529,11 +3305,11 @@ export function REPL({
     //   the visible input.
     // - Loading (queued): handlePromptSubmit enqueued + cleared input, then
     //   returned quickly. Restoring now places the stash back after the clear.
-    if ((isSlashCommand || isLoading) && stashedPrompt !== undefined) {
+    if ((isSlashCommand || isLoading) && stashedPrompt !== null) {
       setInputValue(stashedPrompt.text);
       helpers.setCursorOffset(stashedPrompt.cursorOffset);
       setPastedContents(stashedPrompt.pastedContents);
-      setStashedPrompt(undefined);
+      setStashedPrompt(null);
     }
   }, [queryGuard,
   // isLoading is read at the !isLoading checks above for input-clearing
@@ -4264,74 +4040,39 @@ export function REPL({
   // Props for GlobalKeybindingHandlers component (rendered inside KeybindingSetup)
   const virtualScrollActive = isFullscreenEnvEnabled() && !disableVirtualScroll;
 
-  // Transcript search state. Hooks must be unconditional so they live here
-  // (not inside the `if (screen === 'transcript')` branch below); isActive
-  // gates the useInput. Query persists across bar open/close so n/N keep
-  // working after Enter dismisses the bar (less semantics).
-  const jumpRef = useRef<JumpHandle | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchCount, setSearchCount] = useState(0);
-  const [searchCurrent, setSearchCurrent] = useState(0);
-  const onSearchMatchesChange = useCallback((count: number, current: number) => {
-    setSearchCount(count);
-    setSearchCurrent(current);
-  }, []);
-  useInput((input, key, event) => {
-    if (key.ctrl || key.meta) return;
-    // No Esc handling here — less has no navigating mode. Search state
-    // (highlights, n/N) is just state. Esc/q/ctrl+c → transcript:exit
-    // (ungated). Highlights clear on exit via the screen-change effect.
-    if (input === '/') {
-      // Capture scrollTop NOW — typing is a preview, 0-matches snaps
-      // back here. Synchronous ref write, fires before the bar's
-      // mount-effect calls setSearchQuery.
-      jumpRef.current?.setAnchor();
-      setSearchOpen(true);
-      event.stopImmediatePropagation();
-      return;
-    }
-    // Held-key batching: tokenizer coalesces to 'nnn'. Same uniform-batch
-    // pattern as modalPagerAction in ScrollKeybindingHandler.tsx. Each
-    // repeat is a step (n isn't idempotent like g).
-    const c = input[0];
-    if ((c === 'n' || c === 'N') && input === c.repeat(input.length) && searchCount > 0) {
-      const fn = c === 'n' ? jumpRef.current?.nextMatch : jumpRef.current?.prevMatch;
-      if (fn) for (let i = 0; i < input.length; i++) fn();
-      event.stopImmediatePropagation();
-    }
-  },
-  // Search needs virtual scroll (jumpRef drives VirtualMessageList). [
-  // kills it, so !dumpMode — after [ there's nothing to jump in.
-  {
-    isActive: screen === 'transcript' && virtualScrollActive && !searchOpen && !dumpMode
-  });
-  const {
-    setQuery: setHighlight,
-    scanElement,
-    setPositions
-  } = useSearchHighlight();
+  // inTranscript must be declared before useTranscriptSearch — the hook
+  // reads it as input. Was declared further down (after the hook call)
+  // which caused a TDZ ReferenceError when bun run dev evaluates this
+  // component; the build:dev bundle happened to tolerate it but runtime
+  // from source strictly throws "Cannot access 'inTranscript' before
+  // initialization".
+  const inTranscript = screen === 'transcript' && virtualScrollActive;
 
-  // Resize → abort search. Positions are (msg, query, WIDTH)-keyed —
-  // cached positions are stale after a width change (new layout, new
-  // wrapping). Clearing searchQuery triggers VML's setSearchQuery('')
-  // which clears positionsCache + setPositions(null). Bar closes.
-  // User hits / again → fresh everything.
+  // Transcript search state. Search-input concern extracted into
+  // useTranscriptSearch; escape hatches (q, [, v) stay here because they
+  // touch dump-mode + editor-tempfile rendering that's caller-managed.
+  const {
+    jumpRef,
+    searchOpen,
+    searchQuery,
+    searchCount,
+    searchCurrent,
+    setHighlight,
+    setPositions,
+    scanElement,
+    onSearchMatchesChange,
+    commitSearch,
+    cancelSearch
+  } = useTranscriptSearch({
+    screen,
+    virtualScrollActive,
+    dumpMode,
+    inTranscript
+  });
+
+  // Terminal width is needed here too (for companionNarrow layout) —
+  // useTranscriptSearch keeps its own copy to drive the resize-clear effect.
   const transcriptCols = useTerminalSize().columns;
-  const prevColsRef = React.useRef(transcriptCols);
-  React.useEffect(() => {
-    if (prevColsRef.current !== transcriptCols) {
-      prevColsRef.current = transcriptCols;
-      if (searchQuery || searchOpen) {
-        setSearchOpen(false);
-        setSearchQuery('');
-        setSearchCount(0);
-        setSearchCurrent(0);
-        jumpRef.current?.disarmSearch();
-        setHighlight('');
-      }
-    }
-  }, [transcriptCols, searchQuery, searchOpen, setHighlight]);
 
   // Transcript escape hatches. Bare letters in modal context (no prompt
   // competing for input) — same class as g/G/j/k in ScrollKeybindingHandler.
@@ -4407,26 +4148,16 @@ export function REPL({
   // unrelated normal-mode text (overlay is alt-screen-global) and avoids
   // surprise n/N on re-entry. Same exit resets [ dump mode — each ctrl+o
   // entry is a fresh instance.
-  const inTranscript = screen === 'transcript' && virtualScrollActive;
+  // Search reset on screen change is owned by useTranscriptSearch.
+  // Editor + dump-mode reset stay here because they touch caller state.
   useEffect(() => {
     if (!inTranscript) {
-      setSearchQuery('');
-      setSearchCount(0);
-      setSearchCurrent(0);
-      setSearchOpen(false);
       editorGenRef.current++;
       clearTimeout(editorTimerRef.current);
       setDumpMode(false);
       setEditorStatus('');
     }
   }, [inTranscript]);
-  useEffect(() => {
-    setHighlight(inTranscript ? searchQuery : '');
-    // Clear the position-based CURRENT (yellow) overlay too. setHighlight
-    // only clears the scan-based inverse. Without this, the yellow box
-    // persists at its last screen coords after ctrl-c exits transcript.
-    if (!inTranscript) setPositions(null);
-  }, [inTranscript, searchQuery, setHighlight, setPositions]);
   const globalKeybindingProps = {
     screen,
     setScreen,
@@ -4503,35 +4234,7 @@ export function REPL({
       // memory (cursor lands after 'foo', /hello → foohello).
       // Cancel-restore handles the 'don't lose prior search'
       // concern differently (onCancel re-applies searchQuery).
-      initialQuery="" count={searchCount} current={searchCurrent} onClose={q => {
-        // Enter — commit. 0-match guard: junk query shouldn't
-        // persist (badge hidden, n/N dead anyway).
-        setSearchQuery(searchCount > 0 ? q : '');
-        setSearchOpen(false);
-        // onCancel path: bar unmounts before its useEffect([query])
-        // can fire with ''. Without this, searchCount stays stale
-        // (n guard at :4956 passes) and VML's matches[] too
-        // (nextMatch walks the old array). Phantom nav, no
-        // highlight. onExit (Enter, q non-empty) still commits.
-        if (!q) {
-          setSearchCount(0);
-          setSearchCurrent(0);
-          jumpRef.current?.setSearchQuery('');
-        }
-      }} onCancel={() => {
-        // Esc/ctrl+c/ctrl+g — undo. Bar's effect last fired
-        // with whatever was typed. searchQuery (REPL state)
-        // is unchanged since / (onClose = commit, didn't run).
-        // Two VML calls: '' restores anchor (0-match else-
-        // branch), then searchQuery re-scans from anchor's
-        // nearest. Both synchronous — one React batch.
-        // setHighlight explicit: REPL's sync-effect dep is
-        // searchQuery (unchanged), wouldn't re-fire.
-        setSearchOpen(false);
-        jumpRef.current?.setSearchQuery('');
-        jumpRef.current?.setSearchQuery(searchQuery);
-        setHighlight(searchQuery);
-      }} setHighlight={setHighlight} /> : <TranscriptModeFooter showAllInTranscript={showAllInTranscript} virtualScroll={true} status={editorStatus || undefined} searchBadge={searchQuery && searchCount > 0 ? {
+      initialQuery="" count={searchCount} current={searchCurrent} onClose={commitSearch} onCancel={cancelSearch} setHighlight={setHighlight} /> : <TranscriptModeFooter showAllInTranscript={showAllInTranscript} virtualScroll={true} status={editorStatus || undefined} searchBadge={searchQuery && searchCount > 0 ? {
         current: searchCurrent,
         count: searchCount
       } : undefined} />} /> : <>

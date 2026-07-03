@@ -41,6 +41,13 @@ import {
 import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
+import type {
+  BroadcastOutput,
+  MessageOutput,
+  RequestOutput,
+  ResponseOutput,
+  SendMessageToolOutput,
+} from './types.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
 
 const StructuredMessage = lazySchema(() =>
@@ -86,49 +93,24 @@ const inputSchema = lazySchema(() =>
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>
+// The inferred shape (not the ZodObject type) — used by types.test.ts
+// to verify the hand-maintained mirror in ./types.ts stays in sync.
+type InputInferred = z.infer<InputSchema>
+// Exported so consumers (and the types.test.ts identity check) can
+// compare the Zod-derived shape against the hand-maintained `Input`
+// mirror in `./types.ts`. Drift between them is a silent bug at runtime.
+export type { InputInferred }
 
-export type Input = z.infer<InputSchema>
+export type { Input } from './types.js'
 
-export type MessageRouting = {
-  sender: string
-  senderColor?: string
-  target: string
-  targetColor?: string
-  summary?: string
-  content?: string
-}
-
-export type MessageOutput = {
-  success: boolean
-  message: string
-  routing?: MessageRouting
-}
-
-export type BroadcastOutput = {
-  success: boolean
-  message: string
-  recipients: string[]
-  routing?: MessageRouting
-}
-
-export type RequestOutput = {
-  success: boolean
-  message: string
-  request_id: string
-  target: string
-}
-
-export type ResponseOutput = {
-  success: boolean
-  message: string
-  request_id?: string
-}
-
-export type SendMessageToolOutput =
-  | MessageOutput
-  | BroadcastOutput
-  | RequestOutput
-  | ResponseOutput
+export type {
+  MessageRouting,
+  MessageOutput,
+  BroadcastOutput,
+  RequestOutput,
+  ResponseOutput,
+  SendMessageToolOutput,
+} from './types.js'
 
 function findTeammateColor(
   appState: {

@@ -30,6 +30,24 @@ bun run dev
 
 Run the built binary with `./freecc` or `./freecc-dev`. Set `ANTHROPIC_API_KEY` in the environment or use OAuth via `./freecc /login`.
 
+## Verification
+
+```bash
+# Typecheck (use the same flags as CI)
+bunx tsc --noEmit --ignoreDeprecations 6.0
+
+# Run tests
+bun test
+
+# Lint and format
+bunx biome check .
+bunx biome format --write .
+
+# Verify binary works after refactors
+./freecc --version   # should print "1.0.3 (Claude Code)"
+./freecc --help      # should print usage
+```
+
 ## High-level architecture
 
 - **Entry point/UI loop**: src/entrypoints/cli.tsx bootstraps the CLI, with the main interactive UI in src/screens/REPL.tsx (Ink/React).
@@ -38,7 +56,8 @@ Run the built binary with `./freecc` or `./freecc-dev`. Set `ANTHROPIC_API_KEY` 
 - **Core subsystems**:
   - src/services/: API clients, OAuth/MCP integration, analytics stubs
   - src/state/: app state store
-  - src/hooks/: React hooks used by UI/flows
+  - src/hooks/: CLI hook system (custom hooks registered via the
+    `registerHookCallbacks` API; not React hooks despite the directory name)
   - src/components/: terminal UI components (Ink)
   - src/skills/: skill system
   - src/plugins/: plugin system
@@ -82,3 +101,23 @@ Run the built binary with `./freecc` or `./freecc-dev`. Set `ANTHROPIC_API_KEY` 
 - Message types: `user` (not `human`), `assistant`, `tool_result`, `system`, `progress`, `attachment`.
 - Commands register in `src/commands.ts` via import + add to `COMMANDS()` array.
 - Builtin plugins register in `src/plugins/bundled/index.ts`.
+
+## Recent refactors (large files split into focused modules)
+
+Several large files have been refactored into focused modules:
+
+- `src/utils/auth.ts` (2096 → 234 LOC, -89%): split into `authAws`,
+  `authGcp`, `authClaudeAiOAuth`, `authTokenSource`, `authApiKey`,
+  `authSubscription`, `authLifecycle`
+- `src/cli/print.ts` (5594 → 460 LOC, -92%): split into `printMcp`,
+  `printLifecycle`, `printPermission`, `printHelpers`, `printHandlers`,
+  `printHeadless`, `printStreamingMcp`, `printStreamingPlugins`,
+  `printStreamingCore`
+- `src/utils/hooks.ts` (5022 → 2682 LOC, -46%): split into `hooksMessages`,
+  `hooksConfig`, `hooksLifecycle`, `hooksExec`, `hooksExecution`
+- `src/utils/messages.ts` (5512 → 5370 LOC): split into `messagesContent`,
+  `messagesSynthetic`, `messagesLookups`
+
+Each module has a focused concern. Use the new boundaries when reading
+or modifying code. Import cycles were reduced from 8 to 3 — the
+remaining ones are intentional (entry-point coupling).
