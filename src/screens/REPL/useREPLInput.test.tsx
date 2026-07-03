@@ -28,8 +28,9 @@ for (const key of [
   'getComputedStyle',
   'CSS',
 ] as const) {
-  // @ts-expect-error – populating globals for React
-  globalThis[key] = (happyWindow as any)[key]
+  // Populate globals for React. happy-dom's types don't include all
+  // these on globalThis, so we cast.
+  ;(globalThis as Record<string, unknown>)[key] = (happyWindow as unknown as Record<string, unknown>)[key]
 }
 
 // React 19's act() warns when this flag isn't set. Required for the
@@ -296,6 +297,72 @@ describe('useREPLInput — initial state', () => {
     expect(result.current.vimMode).toBe('INSERT')
     expect(result.current.stashedPrompt).toBe(null)
     expect(result.current.pastedContents).toEqual({})
+    expect(result.current.isPromptInputActive).toBe(false)
+    unmount()
+  })
+})
+
+describe('useREPLInput — suppression timer', () => {
+  it('isPromptInputActive flips false after PROMPT_SUPPRESSION_MS of inactivity', async () => {
+    const params = makeParams({ PROMPT_SUPPRESSION_MS: 50 })
+    const { result, unmount } = renderHook(() => useREPLInput(params))
+
+    act(() => {
+      result.current.setInputValue('typing')
+    })
+    expect(result.current.isPromptInputActive).toBe(true)
+
+    // Wait for the timer to fire (50ms + buffer)
+    await new Promise(resolve => setTimeout(resolve, 80))
+    expect(result.current.isPromptInputActive).toBe(false)
+    unmount()
+  })
+
+  it('timer resets on each subsequent keystroke (does not fire prematurely)', async () => {
+    const params = makeParams({ PROMPT_SUPPRESSION_MS: 100 })
+    const { result, unmount } = renderHook(() => useREPLInput(params))
+
+    act(() => {
+      result.current.setInputValue('a')
+    })
+
+    // After 60ms (still within window), type another char. The first
+    // timer should be cleared, a new one scheduled.
+    await new Promise(resolve => setTimeout(resolve, 60))
+    act(() => {
+      result.current.setInputValue('ab')
+    })
+
+    // After another 60ms (120ms total but each keystroke resets), still
+    // active because no full PROMPT_SUPPRESSION_MS of inactivity has
+    // elapsed since the last keystroke.
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(result.current.isPromptInputActive).toBe(true)
+
+    // Now wait the full window past the last keystroke.
+    await new Promise(resolve => setTimeout(resolve, 120))
+    expect(result.current.isPromptInputActive).toBe(false)
+    unmount()
+  })
+
+  it('timer is cleared when input empties (no spurious flip)', async () => {
+    const params = makeParams({ PROMPT_SUPPRESSION_MS: 50 })
+    const { result, unmount } = renderHook(() => useREPLInput(params))
+
+    act(() => {
+      result.current.setInputValue('hello')
+    })
+    expect(result.current.isPromptInputActive).toBe(true)
+
+    // Clear input — wrapped setter flips active to false synchronously.
+    act(() => {
+      result.current.setInputValue('')
+    })
+    expect(result.current.isPromptInputActive).toBe(false)
+
+    // Wait past the suppression window — should stay false (timer
+    // was never scheduled because inputValue is empty).
+    await new Promise(resolve => setTimeout(resolve, 80))
     expect(result.current.isPromptInputActive).toBe(false)
     unmount()
   })

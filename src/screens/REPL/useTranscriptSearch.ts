@@ -95,7 +95,21 @@ export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptS
     setSearchCurrent(current);
   }, []);
 
-  const { setQuery: setHighlight, scanElement, setPositions } = useSearchHighlight();
+  const { setQuery: setHighlightRaw, scanElement, setPositions: setPositionsRaw } = useSearchHighlight();
+
+  // useSearchHighlight returns stable references in production (useMemo
+  // keyed on the Ink instance), but defense in depth: wrap them in
+  // useCallback so effects that depend on these setters never re-fire
+  // unless their deps actually change. Particularly important for the
+  // highlight sync effect (deps include setPositions).
+  const setHighlight = useCallback(
+    (query: string) => setHighlightRaw(query),
+    [setHighlightRaw],
+  );
+  const setPositions = useCallback(
+    (state: Parameters<typeof setPositionsRaw>[0]) => setPositionsRaw(state),
+    [setPositionsRaw],
+  );
 
   // Less `n`/`N` and `/` open. Search bar's own useSearchInput handles
   // query editing; this hook only manages the open/closed mode + jumps.
@@ -152,9 +166,19 @@ export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptS
 
   // Fresh `less` per transcript entry. Prevents stale highlights matching
   // unrelated normal-mode text (overlay is alt-screen-global) and avoids
-  // surprise n/N on re-entry.
+  // surprise n/N on re-entry. Defensive: also reset on entry (not just
+  // exit) so any code path that flips inTranscript → true without going
+  // through false first can't leak stale state from a prior session.
   useEffect(() => {
-    if (!inTranscript) {
+    if (inTranscript) {
+      // Entry: clear stale state from prior transcript sessions.
+      searchQueryRef.current = '';
+      searchCountRef.current = 0;
+      setSearchQuery('');
+      setSearchCount(0);
+      setSearchCurrent(0);
+    } else {
+      // Exit: close any open bar and clear counts.
       setSearchQuery('');
       setSearchCount(0);
       setSearchCurrent(0);

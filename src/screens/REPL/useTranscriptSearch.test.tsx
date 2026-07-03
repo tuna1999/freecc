@@ -27,8 +27,9 @@ for (const key of [
   'getComputedStyle',
   'CSS',
 ] as const) {
-  // @ts-expect-error – populating globals for React
-  globalThis[key] = (happyWindow as any)[key]
+  // Populate globals for React. happy-dom's types don't include all
+  // these on globalThis, so we cast.
+  ;(globalThis as Record<string, unknown>)[key] = (happyWindow as unknown as Record<string, unknown>)[key]
 }
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
