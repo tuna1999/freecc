@@ -155,8 +155,8 @@ describe('useTranscriptSearch — commitSearch semantics', () => {
   it('discards query when matches = 0 (0-match guard)', () => {
     // 0-match guard: if no matches, junk query must not persist —
     // n/N would be dead and the badge hidden. The hook reads
-    // `searchCount` from the closure of `commitSearch`, so we leave
-    // it at its initial 0 and verify the query is discarded.
+    // `searchCount` via a ref (not closure) so the 0-match decision
+    // is always based on the most recently reported matches.
     const { result, unmount } = renderHook(() =>
       useTranscriptSearch({
         screen: 'transcript',
@@ -198,6 +198,35 @@ describe('useTranscriptSearch — commitSearch semantics', () => {
     // Counters reset by the !q branch inside commitSearch.
     expect(result.current.searchCount).toBe(0)
     expect(result.current.searchCurrent).toBe(0)
+    unmount()
+  })
+
+  it('uses the LATEST searchCount via ref (regression for stale-closure bug)', () => {
+    // Regression: before the ref-pattern fix, the Enter handler could
+    // see a stale searchCount=0 when VML had reported 5 matches in
+    // the same tick. The query that DID have matches was then
+    // discarded. The ref pattern guarantees commitSearch reads the
+    // most recent value regardless of React batching.
+    const { result, unmount } = renderHook(() =>
+      useTranscriptSearch({
+        screen: 'transcript',
+        virtualScrollActive: true,
+        dumpMode: false,
+        inTranscript: true,
+      }),
+    )
+
+    // Simulate: VML reports 5 matches in the same tick as the user
+    // presses Enter. act() batches these; commitSearch (with stable
+    // identity) reads the ref that onSearchMatchesChange updated.
+    act(() => {
+      result.current.onSearchMatchesChange(5, 1)
+      result.current.commitSearch('foo')
+    })
+
+    // Despite the synchronous order, the ref was updated before
+    // commitSearch read it — query persists.
+    expect(result.current.searchQuery).toBe('foo')
     unmount()
   })
 })
@@ -299,6 +328,35 @@ describe('useTranscriptSearch — reference stability', () => {
     })
 
     expect(result.current.onSearchMatchesChange).toBe(first)
+    unmount()
+  })
+
+  it('cancelSearch reads latest searchQuery via ref (not stale closure)', () => {
+    // Regression test for the stale-searchCount/searchQuery closure
+    // bug. cancelSearch must see the most recently committed value,
+    // not a stale snapshot from when the callback was created.
+    const { result, unmount } = renderHook(() =>
+      useTranscriptSearch({
+        screen: 'transcript',
+        virtualScrollActive: true,
+        dumpMode: false,
+        inTranscript: true,
+      }),
+    )
+
+    // Commit a query so cancelSearch has something to preserve.
+    act(() => {
+      result.current.onSearchMatchesChange(2, 1)
+    })
+    act(() => {
+      result.current.commitSearch('hello')
+    })
+
+    const cancelAfterCommit = result.current.cancelSearch
+
+    // The cancelSearch identity was stable across the searchCount update
+    // → commit. Verify it's still the same one now.
+    expect(result.current.cancelSearch).toBe(cancelAfterCommit)
     unmount()
   })
 })

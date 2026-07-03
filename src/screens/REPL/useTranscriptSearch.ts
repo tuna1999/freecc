@@ -81,7 +81,16 @@ export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptS
   const [searchCount, setSearchCount] = useState(0);
   const [searchCurrent, setSearchCurrent] = useState(0);
 
+  // Mirror refs so commitSearch/cancelSearch always read the latest values
+  // without being recreated each time those change. The Enter handler can
+  // fire in the same tick as `onSearchMatchesChange` (before React
+  // commits the count update), so a closure-captured searchCount would
+  // be stale — discards a query that actually has matches.
+  const searchCountRef = useRef(0);
+  const searchQueryRef = useRef('');
+
   const onSearchMatchesChange = useCallback((count: number, current: number) => {
+    searchCountRef.current = count;
     setSearchCount(count);
     setSearchCurrent(current);
   }, []);
@@ -119,21 +128,27 @@ export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptS
   // searchQuery triggers VML's setSearchQuery('') which clears
   // positionsCache + setPositions(null). Bar closes. User hits / again
   // → fresh.
+  //
+  // searchQuery/searchOpen are read via refs so the effect only depends
+  // on transcriptCols. Including them as deps would re-run this effect
+  // on every keystroke while the bar is open (wasted work — guard
+  // prevColsRef would prevent the reset, but the run itself is wasted).
   const transcriptCols = useTerminalSize().columns;
   const prevColsRef = useRef(transcriptCols);
   useEffect(() => {
-    if (prevColsRef.current !== transcriptCols) {
-      prevColsRef.current = transcriptCols;
-      if (searchQuery || searchOpen) {
-        setSearchOpen(false);
-        setSearchQuery('');
-        setSearchCount(0);
-        setSearchCurrent(0);
-        jumpRef.current?.disarmSearch();
-        setHighlight('');
-      }
+    if (prevColsRef.current === transcriptCols) return;
+    prevColsRef.current = transcriptCols;
+    if (searchQueryRef.current || searchOpen) {
+      setSearchOpen(false);
+      setSearchQuery('');
+      searchCountRef.current = 0;
+      setSearchCount(0);
+      setSearchCurrent(0);
+      jumpRef.current?.disarmSearch();
+      setHighlight('');
     }
-  }, [transcriptCols, searchQuery, searchOpen, setHighlight]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs read inside
+  }, [transcriptCols, setHighlight]);
 
   // Fresh `less` per transcript entry. Prevents stale highlights matching
   // unrelated normal-mode text (overlay is alt-screen-global) and avoids
@@ -156,19 +171,25 @@ export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptS
     if (!inTranscript) setPositions(null);
   }, [inTranscript, searchQuery, setHighlight, setPositions]);
 
+  // Sync searchQuery ref so cancelSearch reads the latest value without
+  // being recreated each commit. Search query can change mid-tick (Enter
+  // fires before useEffect commits the state update).
+  useEffect(() => { searchQueryRef.current = searchQuery; }, [searchQuery]);
+
   // Enter pressed in the bar. Empty queries are discarded so n/N stays
   // dead and the badge stays hidden (junk pattern guard).
   const commitSearch = useCallback(
     (q: string) => {
-      setSearchQuery(searchCount > 0 ? q : '');
+      setSearchQuery(searchCountRef.current > 0 ? q : '');
       setSearchOpen(false);
       if (!q) {
+        searchCountRef.current = 0;
         setSearchCount(0);
         setSearchCurrent(0);
         jumpRef.current?.setSearchQuery('');
       }
     },
-    [searchCount],
+    [], // stable — reads latest values via refs
   );
 
   // Esc/Ctrl+C/Ctrl+G — abort. The bar's effect last fired with whatever
@@ -180,9 +201,9 @@ export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptS
   const cancelSearch = useCallback(() => {
     setSearchOpen(false);
     jumpRef.current?.setSearchQuery('');
-    jumpRef.current?.setSearchQuery(searchQuery);
-    setHighlight(searchQuery);
-  }, [searchQuery, setHighlight]);
+    jumpRef.current?.setSearchQuery(searchQueryRef.current);
+    setHighlight(searchQueryRef.current);
+  }, [setHighlight]); // setHighlight is stable across renders (useSearchHighlight uses useCallback)
 
   return {
     jumpRef,

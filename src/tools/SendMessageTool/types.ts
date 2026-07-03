@@ -49,10 +49,15 @@ export type SendMessageToolOutput =
   | ResponseOutput
 
 /**
- * Input schema for SendMessageTool. Kept in sync with the Zod schema
- * defined in `SendMessageTool.ts` (which is the runtime source of truth —
- * `Input = z.infer<typeof inputSchema>` is re-exported from there for
- * backward compatibility). When you change the schema, mirror it here.
+ * Hand-maintained mirror of the Zod schema in `SendMessageTool.ts`.
+ *
+ * Why not `z.infer<typeof inputSchema>`? That would create an import
+ * cycle (UI.tsx → SendMessageTool.ts → types.ts → SendMessageTool.ts).
+ * So this file duplicates the schema's TYPE surface, and the runtime
+ * Zod schema in `SendMessageTool.ts` is the actual source of truth.
+ *
+ * IMPORTANT: When the Zod schema changes, mirror the change here AND
+ * ensure the compile-time identity check in `types.test.ts` still passes.
  */
 export type StructuredMessageInput =
   | { type: 'shutdown_request'; reason?: string }

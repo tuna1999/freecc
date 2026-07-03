@@ -239,6 +239,36 @@ describe('useREPLInput — setInputValueRaw bypass', () => {
     expect(result.current.isPromptInputActive).toBe(false)
     unmount()
   })
+
+  it('setInputValueRaw ALSO updates inputValueRef (regression for voice desync)', () => {
+    // Voice integration calls setInputValueRaw('voice text'). The ref
+    // must reflect this so a subsequent user keystroke sees the right
+    // prev in intercept/repin gates. Without the shared write path,
+    // intercept would compare the new keystroke against '' (stale)
+    // and repin would fire on the first keystroke after voice writes.
+    const tryIntercept = mock((_prev: string, next: string) => {
+      expect(_prev).toBe('voice text') // critical assertion
+      return false
+    })
+    const params = makeParams({ trySuggestBgPRIntercept: tryIntercept })
+    const { result, unmount } = renderHook(() => useREPLInput(params))
+
+    act(() => {
+      result.current.setInputValueRaw('voice text')
+    })
+
+    // Ref must mirror what was just written.
+    expect(result.current.inputValueRef.current).toBe('voice text')
+
+    // Subsequent setInputValue sees the right prev.
+    act(() => {
+      result.current.setInputValue('more')
+    })
+
+    expect(tryIntercept).toHaveBeenCalledWith('voice text', 'more')
+    expect(result.current.inputValue).toBe('more')
+    unmount()
+  })
 })
 
 describe('useREPLInput — inputValueRef mirror', () => {

@@ -93,6 +93,13 @@ const inputSchema = lazySchema(() =>
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>
+// The inferred shape (not the ZodObject type) — used by types.test.ts
+// to verify the hand-maintained mirror in ./types.ts stays in sync.
+type InputInferred = z.infer<InputSchema>
+// Exported so consumers (and the types.test.ts identity check) can
+// compare the Zod-derived shape against the hand-maintained `Input`
+// mirror in `./types.ts`. Drift between them is a silent bug at runtime.
+export type { InputInferred }
 
 export type { Input } from './types.js'
 

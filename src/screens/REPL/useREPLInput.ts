@@ -23,9 +23,6 @@
  */
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type Dispatch, type SetStateAction } from 'react';
 import { consumeEarlyInput } from '../../utils/earlyInput.js';
-import { expandPastedTextRefs, parseReferences } from '../../history.js';
-import { prependModeCharacterToInput } from '../../components/PromptInput/inputModes.js';
-import { prependToShellHistoryCache } from '../../utils/suggestions/shellHistoryCompletion.js';
 import type { PromptInputMode, VimMode } from '../../types/textInputTypes.js';
 import type { PastedContent } from '../../utils/config.js';
 
@@ -85,8 +82,15 @@ export function useREPLInput(params: UseREPLInputParams): UseREPLInputResult {
     RECENT_SCROLL_REPIN_WINDOW_MS,
   } = params;
 
-  const [isPromptInputActive, setIsPromptInputActiveRaw] = useState(false);
-  const [inputValue, setInputValueRaw] = useState(() => consumeEarlyInput());
+  // Seed both states from consumeEarlyInput() so the activation flag
+  // reflects non-empty prefilled stdin (e.g. `echo 'fix' | claude`).
+  // Without this, isPromptInputActive starts false even when inputValue
+  // is non-empty — wrong signal for "user is actively typing" consumers
+  // that gate dialogs on it.
+  const [isPromptInputActive, setIsPromptInputActiveRaw] = useState(
+    () => consumeEarlyInput().trim().length > 0,
+  );
+  const [inputValue, setInputValueState] = useState(() => consumeEarlyInput());
   const [inputMode, setInputMode] = useState<PromptInputMode>('prompt');
   const [stashedPrompt, setStashedPrompt] = useState<{
     text: string;
@@ -97,9 +101,20 @@ export function useREPLInput(params: UseREPLInputParams): UseREPLInputResult {
   const [vimMode, setVimMode] = useState<VimMode>('INSERT');
 
   // Mirror ref so non-render paths (event handlers, async closures) can
-  // read the latest input value without subscribing to state.
+  // read the latest input value without subscribing to state. Both the
+  // exposed setInputValueRaw (used by voice integration) and the wrapped
+  // setInputValue route through this same write path so the ref never
+  // desyncs from state — without that, a voice write followed by user
+  // typing would have stale prev in intercept/repin gates.
   const inputValueRef = useRef(inputValue);
   inputValueRef.current = inputValue;
+
+  const setInputValueRaw = useCallback((value: string) => {
+    // Sync ref before scheduling state. Subsequent reads (in this same
+    // tick or after commit) see the latest value.
+    inputValueRef.current = value;
+    setInputValueState(value);
+  }, []);
 
   // Wrap setInputValue to co-locate suppression state updates. Three
   // side-effects live here:
@@ -117,16 +132,19 @@ export function useREPLInput(params: UseREPLInputParams): UseREPLInputResult {
       ) {
         repinScroll();
       }
-      // Update the ref synchronously so downstream React updates (e.g.
-      // the auto-restore finally) read the new value before commit.
-      inputValueRef.current = value;
+      // Routes through the shared ref-keeping helper so the exposed
+      // setInputValueRaw and this setter stay consistent.
       setInputValueRaw(value);
       setIsPromptInputActiveRaw(value.trim().length > 0);
     },
-    [repinScroll, trySuggestBgPRIntercept, lastUserScrollTsRef, RECENT_SCROLL_REPIN_WINDOW_MS],
+    [repinScroll, trySuggestBgPRIntercept, lastUserScrollTsRef, RECENT_SCROLL_REPIN_WINDOW_MS, setInputValueRaw],
   );
 
-  // Deactivate after the suppression window when input empties out.
+  // Deactivate after PROMPT_SUPPRESSION_MS of inactivity following the last
+  // non-blank keystroke. Resets the timer on every keystroke (the effect's
+  // cleanup → fresh setup). When the input is empty we early-return so the
+  // timer doesn't run needlessly — the wrapped setter already flips
+  // isPromptInputActive false on clear.
   useEffect(() => {
     if (inputValue.trim().length === 0) return;
     const timer = setTimeout(() => setIsPromptInputActiveRaw(false), PROMPT_SUPPRESSION_MS);
