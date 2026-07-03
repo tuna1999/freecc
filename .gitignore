@@ -13,3 +13,5 @@ openclaw/
 # npm lockfile is not used by this project — bun.lock is the single
 # source of truth. The legacy file is git-rm'd in P5.1.
 package-lock.json
+# CocoIndex Code (ccc)
+/.cocoindex_code/

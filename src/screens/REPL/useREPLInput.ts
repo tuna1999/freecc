@@ -45,6 +45,13 @@ export type UseREPLInputParams = {
 export type UseREPLInputResult = {
   inputValue: string;
   setInputValue: (value: string) => void;
+  /**
+   * Raw state setter — bypasses the side-effects of `setInputValue`
+   * (slash-command intercept, repin-on-type, activation flag).
+   * Reserved for integrations that need direct control over the input
+   * buffer (e.g. voice transcription write-back).
+   */
+  setInputValueRaw: Dispatch<SetStateAction<string>>;
   inputMode: PromptInputMode;
   setInputMode: (mode: PromptInputMode) => void;
   stashedPrompt: {
@@ -129,6 +136,7 @@ export function useREPLInput(params: UseREPLInputParams): UseREPLInputResult {
   return {
     inputValue,
     setInputValue,
+    setInputValueRaw,
     inputMode,
     setInputMode,
     stashedPrompt,

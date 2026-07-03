@@ -58,6 +58,18 @@ export type TranscriptSearchResult = {
   scanElement: ReturnType<typeof useSearchHighlight>['scanElement'];
   /** Updates match-count + current-index badge. */
   onSearchMatchesChange: (count: number, current: number) => void;
+  /**
+   * Enter pressed in the bar — commit the typed query.
+   * Empty-typed queries are discarded (n/N dead anyway, badge hidden).
+   * Closes the bar in both cases.
+   */
+  commitSearch: (q: string) => void;
+  /**
+   * Esc/Ctrl+C/Ctrl+G — abort the bar.
+   * searchQuery (the committed one) is preserved; VML is told to re-scan
+   * against the prior query so the highlight overlay stays consistent.
+   */
+  cancelSearch: () => void;
 };
 
 export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptSearchResult {
@@ -144,6 +156,34 @@ export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptS
     if (!inTranscript) setPositions(null);
   }, [inTranscript, searchQuery, setHighlight, setPositions]);
 
+  // Enter pressed in the bar. Empty queries are discarded so n/N stays
+  // dead and the badge stays hidden (junk pattern guard).
+  const commitSearch = useCallback(
+    (q: string) => {
+      setSearchQuery(searchCount > 0 ? q : '');
+      setSearchOpen(false);
+      if (!q) {
+        setSearchCount(0);
+        setSearchCurrent(0);
+        jumpRef.current?.setSearchQuery('');
+      }
+    },
+    [searchCount],
+  );
+
+  // Esc/Ctrl+C/Ctrl+G — abort. The bar's effect last fired with whatever
+  // was typed; searchQuery (committed) is unchanged. Two VML calls: ''
+  // restores the anchor (0-match else-branch), then the prior searchQuery
+  // re-scans from that anchor's nearest. Synchronous — one React batch.
+  // setHighlight is explicit because the highlight sync-effect depends on
+  // searchQuery (which we didn't change), so it wouldn't re-fire on its own.
+  const cancelSearch = useCallback(() => {
+    setSearchOpen(false);
+    jumpRef.current?.setSearchQuery('');
+    jumpRef.current?.setSearchQuery(searchQuery);
+    setHighlight(searchQuery);
+  }, [searchQuery, setHighlight]);
+
   return {
     jumpRef,
     searchOpen,
@@ -154,5 +194,7 @@ export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptS
     setPositions,
     scanElement,
     onSearchMatchesChange,
+    commitSearch,
+    cancelSearch,
   };
 }

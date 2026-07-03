@@ -779,7 +779,7 @@ export function REPL({
   const PROMPT_SUPPRESSION_MS = 1500;
   // True when user is actively typing — defers interrupt dialogs so keystrokes
   // don't accidentally dismiss or answer a permission prompt the user hasn't read yet.
-  const [isPromptInputActive, setIsPromptInputActive] = React.useState(false);
+  // Moved into useREPLInput (line ~1150) — owned by the input cluster.
   const [autoUpdaterResult, setAutoUpdaterResult] = useState<AutoUpdaterResult | null>(null);
   useEffect(() => {
     if (autoUpdaterResult?.notifications) {
@@ -1139,6 +1139,7 @@ export function REPL({
   const {
     inputValue,
     setInputValue,
+    setInputValueRaw,
     inputMode,
     setInputMode,
     stashedPrompt,
@@ -1202,7 +1203,6 @@ export function REPL({
 
   // Use whichever remote mode is active
   const activeRemote = sshRemote.isRemoteMode ? sshRemote : directConnect.isRemoteMode ? directConnect : remoteSession;
-  const [pastedContents, setPastedContents] = useState<Record<number, PastedContent>>({});
   const [submitCount, setSubmitCount] = useState(0);
   // Ref instead of state to avoid triggering React re-renders on every
   // streaming text_delta. The spinner reads this via its animation timer.
@@ -1286,7 +1286,6 @@ export function REPL({
     current: provisionContentReplacementState(initialMessages, initialContentReplacements)
   }));
   const [haveShownCostDialog, setHaveShownCostDialog] = useState(getGlobalConfig().hasAcknowledgedCostThreshold);
-  const [vimMode, setVimMode] = useState<VimMode>('INSERT');
   const [showBashesDialog, setShowBashesDialog] = useState<string | boolean>(false);
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
@@ -3031,11 +3030,11 @@ export function REPL({
             // Restore stashed prompt after local-jsx command completes.
             // The normal stash restoration path (below) is skipped because
             // local-jsx commands return early from onSubmit.
-            if (stashedPrompt !== undefined) {
+            if (stashedPrompt !== null) {
               setInputValue(stashedPrompt.text);
               helpers.setCursorOffset(stashedPrompt.cursorOffset);
               setPastedContents(stashedPrompt.pastedContents);
-              setStashedPrompt(undefined);
+              setStashedPrompt(null);
             }
           };
 
@@ -3124,11 +3123,11 @@ export function REPL({
     // accepting speculation, or in remote mode (which sends via WS and
     // returns early without calling handlePromptSubmit).
     const submitsNow = !isLoading || speculationAccept || activeRemote.isRemoteMode;
-    if (stashedPrompt !== undefined && !isSlashCommand && submitsNow) {
+    if (stashedPrompt !== null && !isSlashCommand && submitsNow) {
       setInputValue(stashedPrompt.text);
       helpers.setCursorOffset(stashedPrompt.cursorOffset);
       setPastedContents(stashedPrompt.pastedContents);
-      setStashedPrompt(undefined);
+      setStashedPrompt(null);
     } else if (submitsNow) {
       if (!options?.fromKeybinding) {
         // Clear input when not loading or accepting speculation.
@@ -3307,11 +3306,11 @@ export function REPL({
     //   the visible input.
     // - Loading (queued): handlePromptSubmit enqueued + cleared input, then
     //   returned quickly. Restoring now places the stash back after the clear.
-    if ((isSlashCommand || isLoading) && stashedPrompt !== undefined) {
+    if ((isSlashCommand || isLoading) && stashedPrompt !== null) {
       setInputValue(stashedPrompt.text);
       helpers.setCursorOffset(stashedPrompt.cursorOffset);
       setPastedContents(stashedPrompt.pastedContents);
-      setStashedPrompt(undefined);
+      setStashedPrompt(null);
     }
   }, [queryGuard,
   // isLoading is read at the !isLoading checks above for input-clearing
@@ -4042,6 +4041,14 @@ export function REPL({
   // Props for GlobalKeybindingHandlers component (rendered inside KeybindingSetup)
   const virtualScrollActive = isFullscreenEnvEnabled() && !disableVirtualScroll;
 
+  // inTranscript must be declared before useTranscriptSearch — the hook
+  // reads it as input. Was declared further down (after the hook call)
+  // which caused a TDZ ReferenceError when bun run dev evaluates this
+  // component; the build:dev bundle happened to tolerate it but runtime
+  // from source strictly throws "Cannot access 'inTranscript' before
+  // initialization".
+  const inTranscript = screen === 'transcript' && virtualScrollActive;
+
   // Transcript search state. Search-input concern extracted into
   // useTranscriptSearch; escape hatches (q, [, v) stay here because they
   // touch dump-mode + editor-tempfile rendering that's caller-managed.
@@ -4054,7 +4061,9 @@ export function REPL({
     setHighlight,
     setPositions,
     scanElement,
-    onSearchMatchesChange
+    onSearchMatchesChange,
+    commitSearch,
+    cancelSearch
   } = useTranscriptSearch({
     screen,
     virtualScrollActive,
@@ -4140,7 +4149,7 @@ export function REPL({
   // unrelated normal-mode text (overlay is alt-screen-global) and avoids
   // surprise n/N on re-entry. Same exit resets [ dump mode — each ctrl+o
   // entry is a fresh instance.
-  const inTranscript = screen === 'transcript' && virtualScrollActive;
+  // (inTranscript is now declared above the useTranscriptSearch call.)
   // Search reset on screen change is owned by useTranscriptSearch.
   // Editor + dump-mode reset stay here because they touch caller state.
   useEffect(() => {
@@ -4227,35 +4236,7 @@ export function REPL({
       // memory (cursor lands after 'foo', /hello → foohello).
       // Cancel-restore handles the 'don't lose prior search'
       // concern differently (onCancel re-applies searchQuery).
-      initialQuery="" count={searchCount} current={searchCurrent} onClose={q => {
-        // Enter — commit. 0-match guard: junk query shouldn't
-        // persist (badge hidden, n/N dead anyway).
-        setSearchQuery(searchCount > 0 ? q : '');
-        setSearchOpen(false);
-        // onCancel path: bar unmounts before its useEffect([query])
-        // can fire with ''. Without this, searchCount stays stale
-        // (n guard at :4956 passes) and VML's matches[] too
-        // (nextMatch walks the old array). Phantom nav, no
-        // highlight. onExit (Enter, q non-empty) still commits.
-        if (!q) {
-          setSearchCount(0);
-          setSearchCurrent(0);
-          jumpRef.current?.setSearchQuery('');
-        }
-      }} onCancel={() => {
-        // Esc/ctrl+c/ctrl+g — undo. Bar's effect last fired
-        // with whatever was typed. searchQuery (REPL state)
-        // is unchanged since / (onClose = commit, didn't run).
-        // Two VML calls: '' restores anchor (0-match else-
-        // branch), then searchQuery re-scans from anchor's
-        // nearest. Both synchronous — one React batch.
-        // setHighlight explicit: REPL's sync-effect dep is
-        // searchQuery (unchanged), wouldn't re-fire.
-        setSearchOpen(false);
-        jumpRef.current?.setSearchQuery('');
-        jumpRef.current?.setSearchQuery(searchQuery);
-        setHighlight(searchQuery);
-      }} setHighlight={setHighlight} /> : <TranscriptModeFooter showAllInTranscript={showAllInTranscript} virtualScroll={true} status={editorStatus || undefined} searchBadge={searchQuery && searchCount > 0 ? {
+      initialQuery="" count={searchCount} current={searchCurrent} onClose={commitSearch} onCancel={cancelSearch} setHighlight={setHighlight} /> : <TranscriptModeFooter showAllInTranscript={showAllInTranscript} virtualScroll={true} status={editorStatus || undefined} searchBadge={searchQuery && searchCount > 0 ? {
         current: searchCurrent,
         count: searchCount
       } : undefined} />} /> : <>

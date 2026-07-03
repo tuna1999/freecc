@@ -142,12 +142,12 @@ type Props = {
     text: string;
     cursorOffset: number;
     pastedContents: Record<number, PastedContent>;
-  } | undefined;
+  } | null;
   setStashedPrompt: (value: {
     text: string;
     cursorOffset: number;
     pastedContents: Record<number, PastedContent>;
-  } | undefined) => void;
+  } | null) => void;
   submitCount: number;
   onShowMessageSelector: () => void;
   /** Fullscreen message actions: shift+↑ enters cursor. */
@@ -1355,12 +1355,12 @@ function PromptInput({
 
   // Handler for chat:stash - stash/unstash prompt
   const handleStash = useCallback(() => {
-    if (input.trim() === '' && stashedPrompt !== undefined) {
+    if (input.trim() === '' && stashedPrompt !== null) {
       // Pop stash when input is empty
       trackAndSetInput(stashedPrompt.text);
       setCursorOffset(stashedPrompt.cursorOffset);
       setPastedContents(stashedPrompt.pastedContents);
-      setStashedPrompt(undefined);
+      setStashedPrompt(null);
     } else if (input.trim() !== '') {
       // Push to stash (save text, cursor position, and pasted contents)
       setStashedPrompt({
@@ -1641,16 +1641,23 @@ function PromptInput({
   // autocomplete acceptance). Using useKeybindings would cause
   // stopImmediatePropagation on Enter, blocking autocomplete from seeing the key.
   const keybindingContext = useOptionalKeybindingContext();
+  // Mirror `input` into a ref so the registered handler can read the latest
+  // value without being a dependency of the effect. Putting `input` directly
+  // in deps causes a cleanup+re-register on every keystroke — the brief
+  // window between unregister and register drops Enter and the user's
+  // message never sends. Same pattern as the Onboarding memoize-handlers fix.
+  const inputRef = useRef(input);
+  inputRef.current = input;
   useEffect(() => {
     if (!keybindingContext || isModalOverlayActive) return;
     return keybindingContext.registerHandler({
       action: 'chat:submit',
       context: 'Chat',
       handler: () => {
-        void onSubmit(input);
+        void onSubmit(inputRef.current);
       }
     });
-  }, [keybindingContext, isModalOverlayActive, onSubmit, input]);
+  }, [keybindingContext, isModalOverlayActive, onSubmit]);
 
   // Chat context keybindings for editing shortcuts
   // Note: history:previous/history:next are NOT handled here. They are passed as
@@ -2246,7 +2253,7 @@ function PromptInput({
       {hasSuppressedDialogs && <Box marginTop={1} marginLeft={2}>
           <Text dimColor>Waiting for permission…</Text>
         </Box>}
-      <PromptInputStashNotice hasStash={stashedPrompt !== undefined} />
+      <PromptInputStashNotice hasStash={stashedPrompt !== null} />
       {swarmBanner ? <>
           <Text color={swarmBanner.bgColor}>
             {swarmBanner.text ? <>
