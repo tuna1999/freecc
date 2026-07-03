@@ -217,15 +217,20 @@ export function useTranscriptSearch(params: TranscriptSearchParams): TranscriptS
   );
 
   // Esc/Ctrl+C/Ctrl+G — abort. The bar's effect last fired with whatever
-  // was typed; searchQuery (committed) is unchanged. Two VML calls: ''
-  // restores the anchor (0-match else-branch), then the prior searchQuery
-  // re-scans from that anchor's nearest. Synchronous — one React batch.
-  // setHighlight is explicit because the highlight sync-effect depends on
-  // searchQuery (which we didn't change), so it wouldn't re-fire on its own.
+  // was typed; searchQuery (committed) is unchanged. When a prior query
+  // exists, two VML calls: '' restores the anchor (0-match else-branch),
+  // then the prior searchQuery re-scans from that anchor's nearest.
+  // Synchronous — one React batch. setHighlight is explicit because the
+  // highlight sync-effect depends on searchQuery (which we didn't change),
+  // so it wouldn't re-fire on its own.
   const cancelSearch = useCallback(() => {
     setSearchOpen(false);
     jumpRef.current?.setSearchQuery('');
-    jumpRef.current?.setSearchQuery(searchQueryRef.current);
+    // Skip the restore scan if there's no prior query — saves an
+    // expensive VML scan on a freshly-opened-then-cancelled bar.
+    if (searchQueryRef.current) {
+      jumpRef.current?.setSearchQuery(searchQueryRef.current);
+    }
     setHighlight(searchQueryRef.current);
   }, [setHighlight]); // setHighlight is stable across renders (useSearchHighlight uses useCallback)
 

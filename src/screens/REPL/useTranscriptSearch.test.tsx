@@ -360,4 +360,28 @@ describe('useTranscriptSearch — reference stability', () => {
     expect(result.current.cancelSearch).toBe(cancelAfterCommit)
     unmount()
   })
+
+  it('cancelSearch with no prior query still closes the bar (regression for double-scan fix)', () => {
+    // Optimization: when there's no prior searchQuery, the ''-then-''
+    // pair was a wasted VML scan. The bar still closes and highlight clears.
+    const { result, unmount } = renderHook(() =>
+      useTranscriptSearch({
+        screen: 'transcript',
+        virtualScrollActive: true,
+        dumpMode: false,
+        inTranscript: true,
+      }),
+    )
+
+    // No prior commit — searchQuery stays at its initial ''.
+    expect(result.current.searchQuery).toBe('')
+
+    act(() => {
+      result.current.cancelSearch()
+    })
+
+    expect(result.current.searchOpen).toBe(false)
+    expect(result.current.searchQuery).toBe('')
+    unmount()
+  })
 })
